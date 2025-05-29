@@ -50,6 +50,11 @@ def create_item(item: Item):
     return {"message": "Item has been created", "item": item}
 """
 
+
+@app.get("/")
+def read_root():
+    return {"message": "Hello from Railway!"}
+
 @app.get("/leagues")
 def getLeagues(ids: str = None):
     try:
