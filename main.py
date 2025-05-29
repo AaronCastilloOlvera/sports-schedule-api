@@ -3,8 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 from dotenv import load_dotenv
 import os
-import http.client
-import json
 
 load_dotenv()
 
