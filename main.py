@@ -32,3 +32,15 @@ def get_leagues(id: Optional[List[int]] = Query(None)):
         return {"error": str(e)}
     finally:
         db.close()
+
+@app.get("/favorite-leagues")
+def favorite_league():
+    db = database.SessionLocal()
+    try:
+        favorite_leagues = [1, 2, 3]
+        query = db.query(models.League).filter(models.League.id.in_(favorite_leagues)).order_by(models.League.id)
+        return query.all()
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        db.close()
