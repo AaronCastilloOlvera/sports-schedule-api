@@ -25,7 +25,7 @@ def get_leagues(id: Optional[List[int]] = Query(None)):
     try:
         query = db.query(models.League).order_by(models.League.id)
         if id:
-            query = db.query(models.League.id.in_(id))
+            query = query.filter(models.League.id.in_(id))
         leagues = query.all()
         return leagues
     except Exception as e:
