@@ -23,6 +23,7 @@ def ping_db():
 def get_leagues(id: Optional[List[int]] = Query(None)):
     db = database.SessionLocal()
     try:
+        query = db.query(models.League)
         if id:
             query = db.query(models.League.id.in_(id))
         leagues = query.all()
