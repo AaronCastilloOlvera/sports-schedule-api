@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm  import sessionmaker
 from fastapi import FastAPI
 from dotenv import load_dotenv
@@ -20,7 +20,9 @@ def read_root():
 def ping_db():
     db = SessionLocal()
     try:
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         return {"message": "Database connection is healthy!"}
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        db.close()
