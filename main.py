@@ -1,8 +1,22 @@
 from typing import List, Optional
 from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 import models, database
+import os
+
+load_dotenv()
+origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 models.Base.metadata.create_all(bind=database.engine)
 
 @app.get("/")
