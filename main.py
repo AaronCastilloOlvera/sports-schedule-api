@@ -37,7 +37,7 @@ def get_leagues(id: Optional[List[int]] = Query(None)):
 def favorite_league():
     db = database.SessionLocal()
     try:
-        favorite_leagues = [1, 2, 3]
+        favorite_leagues = [ 2, 39, 61, 71, 78, 135, 140, 262]
         query = db.query(models.League).filter(models.League.id.in_(favorite_leagues)).order_by(models.League.id)
         return query.all()
     except Exception as e:
