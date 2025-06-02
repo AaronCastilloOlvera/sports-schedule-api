@@ -1,5 +1,5 @@
 from typing import List, Optional
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 import models, database
 
 app = FastAPI()
@@ -20,7 +20,7 @@ def ping_db():
         db.close()
 
 @app.get("/leagues")
-def get_leagues(id: Optional[int] = None) -> List[models.League]:
+def get_leagues(id: Optional[List[int]] = Query(None)):
     db = database.SessionLocal()
     try:
         if id:
