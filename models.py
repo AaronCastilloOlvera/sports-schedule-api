@@ -1,5 +1,5 @@
 from sqlalchemy import Column, Integer, String
-from .database import Base
+from database import Base
 
 class League(Base):
     __tablename__ = 'leagues'
@@ -9,4 +9,3 @@ class League(Base):
     type = Column(String, index=True)
     logo = Column(String, index=True)
     country = Column(String, index=True)
-    
