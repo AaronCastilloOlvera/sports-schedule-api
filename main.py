@@ -27,7 +27,7 @@ def ping_db():
     finally:
         db.close()
 
-@app.get("leagues")
+@app.get("/leagues")
 def get_leagues():
     db = SessionLocal()
     try:
