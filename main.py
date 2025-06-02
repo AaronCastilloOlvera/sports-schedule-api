@@ -26,3 +26,14 @@ def ping_db():
         return {"error": str(e)}
     finally:
         db.close()
+
+@app.get("leagues")
+def get_leagues():
+    db = SessionLocal()
+    try:
+        result = db.execute(text("SELECT * FROM leagues")).fetchall()
+        return {"leagues": [dict(row) for row in result]}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        db.close()
