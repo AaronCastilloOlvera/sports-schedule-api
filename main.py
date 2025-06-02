@@ -1,16 +1,14 @@
 from sqlalchemy import create_engine, text
-from sqlalchemy.orm  import sessionmaker
+from sqlalchemy.orm  import sessionmaker, declarative_base
 from fastapi import FastAPI
 from dotenv import load_dotenv
+from . import models, database
 import os
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
 app = FastAPI()
-
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+models.Base.metadata.create_all(bind=database.engine)
 
 @app.get("/")
 def read_root():
@@ -18,7 +16,7 @@ def read_root():
 
 @app.get("/ping-db")    
 def ping_db():
-    db = SessionLocal()
+    db = database.SessionLocal()
     try:
         db.execute(text("SELECT 1"))
         return {"message": "Database connection is healthy!"}
@@ -29,10 +27,10 @@ def ping_db():
 
 @app.get("/leagues")
 def get_leagues():
-    db = SessionLocal()
+    db = database.SessionLocal()
     try:
-        result = db.execute(text("SELECT * FROM leagues")).fetchall()
-        return {"leagues": [dict(row) for row in result]}
+        leagues = db.query(models.League).all()
+        return leagues
     except Exception as e:
         return {"error": str(e)}
     finally:
