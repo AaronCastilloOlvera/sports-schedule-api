@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from dotenv import load_dotenv
-import models, database
+from . import models, database
 
 load_dotenv()
 
