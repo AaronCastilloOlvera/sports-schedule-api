@@ -1,8 +1,6 @@
+from typing import List, Optional
 from fastapi import FastAPI
-from dotenv import load_dotenv
 import models, database
-
-load_dotenv()
 
 app = FastAPI()
 models.Base.metadata.create_all(bind=database.engine)
@@ -22,10 +20,12 @@ def ping_db():
         db.close()
 
 @app.get("/leagues")
-def get_leagues():
+def get_leagues(id: Optional[int] = None) -> List[models.League]:
     db = database.SessionLocal()
     try:
-        leagues = db.query(models.League).all()
+        if id:
+            query = db.query(models.League.id.in_(id))
+        leagues = query.all()
         return leagues
     except Exception as e:
         return {"error": str(e)}
