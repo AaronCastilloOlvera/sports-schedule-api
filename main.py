@@ -1,9 +1,6 @@
-from sqlalchemy import create_engine, text
-from sqlalchemy.orm  import sessionmaker, declarative_base
 from fastapi import FastAPI
 from dotenv import load_dotenv
 from . import models, database
-import os
 
 load_dotenv()
 
@@ -18,8 +15,7 @@ def read_root():
 def ping_db():
     db = database.SessionLocal()
     try:
-        db.execute(text("SELECT 1"))
-        return {"message": "Database connection is healthy!"}
+        yield db
     except Exception as e:
         return {"error": str(e)}
     finally:
