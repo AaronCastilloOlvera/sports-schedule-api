@@ -24,12 +24,12 @@ pip install orjson
 pip install -r requirements.txt
 ```
 
-### 3. Run the local server
+### 3. Run the Local Server
 ```bash
 uvicorn main:app --reload
 ```
 
-### 4. Activate Local Sercer
+### 4. Activate Local Server
 ```bash
 venv\Scripts\activate.bat
 ```
