@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import models, database
 import os
+import redis
+import json
 
 load_dotenv()
 origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
@@ -17,6 +19,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+## Redis Connection
+redis_url = os.getenv("REDIS_URL")
+r = redis.from_url(redis_url, decode_responses=True)
+
+# Create the database tables
 models.Base.metadata.create_all(bind=database.engine)
 
 @app.get("/")
@@ -58,3 +65,26 @@ def favorite_league():
         return {"error": str(e)}
     finally:
         db.close()
+
+@app.get("/leagues/{league_id}/matches")
+def get_matches_by_league(league_id: int):
+    data = r.get(str(league_id))
+    if data is None:
+        return {"error": "No matches found for this league."}
+    try:
+        return json.loads(data)
+    except json.JSONDecodeError:
+        return {"value": data}
+
+@app.get("/leagues/all-matches")
+def get_all_matches():
+    keys = r.keys("*")
+    result = {}
+
+    for key in keys:
+        value = r.get(key)
+        try:
+            result[key] = json.loads(value)
+        except json.JSONDecodeError:
+            result[key] = value
+    return result
