@@ -6,6 +6,7 @@ import models, database
 import os
 import redis
 import json
+import requests
 
 load_dotenv()
 origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
@@ -19,12 +20,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-## Redis Connection
-redis_url = os.getenv("REDIS_URL")
-r = redis.from_url(redis_url, decode_responses=True)
-
 # Create the database tables
 models.Base.metadata.create_all(bind=database.engine)
+
+# Headers for external API requests
+headers = { "x-rapidapi-host": os.getenv("API_URL"), "x-rapidapi-key": os.getenv("API_KEY") }
+
+# Const
+favorite_leagues = [ 2, 39, 61, 71, 78, 135, 140, 262]
 
 @app.get("/")
 def read_root():
@@ -58,7 +61,6 @@ def get_leagues(id: Optional[List[int]] = Query(None)):
 def favorite_league():
     db = database.SessionLocal()
     try:
-        favorite_leagues = [ 2, 39, 61, 71, 78, 135, 140, 262]
         query = db.query(models.League).filter(models.League.id.in_(favorite_leagues)).order_by(models.League.id)
         return query.all()
     except Exception as e:
@@ -66,18 +68,51 @@ def favorite_league():
     finally:
         db.close()
 
-@app.get("/leagues/{league_id}/matches")
-def get_matches_by_league(league_id: int):
-    data = r.get(str(league_id))
-    if data is None:
-        return {"error": "No matches found for this league."}
+@app.get("/leagues/matches/{date}")
+def get_matches_by_date(date: str):
     try:
-        return json.loads(data)
-    except json.JSONDecodeError:
-        return {"value": data}
+        r = get_redis_connection()
+        if r is None: 
+            return {"error": "Redis connection failed"} 
+    
+        cached_data  = r.get(str(date))
+        if cached_data:
+            return json.loads(cached_data) 
 
-@app.get("/leagues/all-matches")
-def get_all_matches():
+        url = f"https://{os.getenv("API_URL")}/fixtures?"
+        params = {"date": date}
+        response = requests.get(url, headers=headers,  params=params)
+        response_data = response.json()
+        matches = response_data.get("response", [])    
+
+        filtered_data = [
+            match for match in matches 
+            if match.get("league", {}).get("id") in favorite_leagues
+        ]
+
+        # Store the filtered data in Redis
+        r.set(date, json.dumps(filtered_data))
+
+        return filtered_data
+        
+    except Exception as e:
+        return {"error": "Failed to fetch matches", "details": str(e)}
+
+@app.get("/redis/keys")
+def get_redis_keys():
+    r = get_redis_connection()
+    if r is None:
+        return {"error": "Redis connection failed"}
+    
+    keys = r.keys("*")
+    return {"keys": keys}
+
+@app.get("/redis/data")
+def get_redis_data():
+    r = get_redis_connection()
+    if r is None:
+        return {"error": "Redis connection failed"}
+    
     keys = r.keys("*")
     result = {}
 
@@ -88,3 +123,25 @@ def get_all_matches():
         except json.JSONDecodeError:
             result[key] = value
     return result
+
+@app.delete("/redis/{key}")
+def delete_redis_key(key: str):
+    r = get_redis_connection()
+    if r is None:
+        return {"error": "Redis connection failed"}
+    
+    try:
+        r.delete(key)
+        return {"message": f"Key '{key}' deleted successfully"}
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_redis_connection():
+    try:
+        redis_url = os.getenv("REDIS_URL")
+        redis_client = redis.from_url(redis_url, decode_responses=True)
+        redis_client.ping()
+        return redis_client
+    except Exception as e:
+        print(f"Redis connection failed: {e}")
+        return None     

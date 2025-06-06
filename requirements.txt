@@ -5,3 +5,4 @@ dotenv
 sqlalchemy
 typing
 redis
+requests
