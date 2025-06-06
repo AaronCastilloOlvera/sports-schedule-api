@@ -105,7 +105,8 @@ def get_redis_keys():
         return {"error": "Redis connection failed"}
     
     keys = r.keys("*")
-    return {"keys": keys}
+    sorted_keys = sorted(keys)
+    return {"keys": sorted_keys}
 
 @app.get("/redis/data")
 def get_redis_data():
