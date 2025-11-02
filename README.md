@@ -6,7 +6,7 @@
 
 ```bash
 python3 -m venv venv
-venv\Scripts\activate.bat  # On Windows
+venv\Scripts\activate.bat  # On Windows (CMD)
 ```
 
 ### 2. Install main dependencies 
