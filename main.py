@@ -53,25 +53,6 @@ def read_root():
         "message": "Sports Schedule API is running",
         "version": "1.0.0"
     }
-@app.get("/ping-db")
-def ping_db():
-    """
-    Test database connection
-    Returns 200 if successful, 500 if connection fails
-    """
-    db = database.SessionLocal()
-    try:
-        # Simple query to test connection
-        db.execute(text("SELECT 1"))
-        return {"message": "Database connection successful"}
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Database connection failed: {str(e)}"
-        )
-    finally:
-        db.close()
-
 
 @app.get("/health")
 def health_check():
