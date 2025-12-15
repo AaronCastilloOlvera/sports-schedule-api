@@ -65,8 +65,15 @@ def health_check():
     """
     health_status = {
         "status": "healthy",
-        "database": None,
-        "redis": None
+        "description": "All systems operational",
+        "database": {
+            "status": None,
+            "description": None
+        },
+        "redis": {
+            "status": None,
+            "description": None
+        }
     }
     
     status_code = 200
@@ -75,10 +82,13 @@ def health_check():
     db = database.SessionLocal()
     try:
         db.execute(text("SELECT 1"))
-        health_status["database"] = "operational"
+        health_status["database"]["status"] = "operational"
+        health_status["database"]["description"] = "Database connection successful"
     except Exception as e:
         health_status["status"] = "unhealthy"
-        health_status["database"] = f"failed: {str(e)}"
+        health_status["description"] = "Critical service unavailable"
+        health_status["database"]["status"] = "failed"
+        health_status["database"]["description"] = str(e)
         status_code = 503  # Service Unavailable - Critical failure
     finally:
         db.close()
@@ -87,17 +97,22 @@ def health_check():
     try:
         r = get_redis_connection()
         if r is None:
-            health_status["redis"] = "connection_failed"
+            health_status["redis"]["status"] = "connection_failed"
+            health_status["redis"]["description"] = "Could not establish Redis connection"
             if status_code != 503:  # Only if DB is OK
                 health_status["status"] = "degraded"
+                health_status["description"] = "Degraded: Redis unavailable but database operational"
                 status_code = 207  # Multi-Status - Partial success
         else:
             r.ping()
-            health_status["redis"] = "operational"
+            health_status["redis"]["status"] = "operational"
+            health_status["redis"]["description"] = "Redis connection successful"
     except Exception as e:
-        health_status["redis"] = f"failed: {str(e)}"
+        health_status["redis"]["status"] = "failed"
+        health_status["redis"]["description"] = str(e)
         if status_code != 503:  # Only if DB is OK
             health_status["status"] = "degraded"
+            health_status["description"] = f"Degraded: Redis error - {str(e)}"
             status_code = 207  # Multi-Status - Partial success
     
     # Return with appropriate status code
