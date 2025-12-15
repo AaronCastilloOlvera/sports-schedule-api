@@ -95,16 +95,15 @@ def health_check():
     
     # Check Redis (NON-CRITICAL)
     try:
-        r = get_redis_connection()
+        r, redis_error = get_redis_connection()
         if r is None:
             health_status["redis"]["status"] = "connection_failed"
-            health_status["redis"]["description"] = "Could not establish Redis connection"
+            health_status["redis"]["description"] = redis_error or "Could not establish Redis connection"
             if status_code != 503:  # Only if DB is OK
                 health_status["status"] = "degraded"
                 health_status["description"] = "Degraded: Redis unavailable but database operational"
                 status_code = 207  # Multi-Status - Partial success
         else:
-            r.ping()
             health_status["redis"]["status"] = "operational"
             health_status["redis"]["description"] = "Redis connection successful"
     except Exception as e:
