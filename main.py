@@ -1,17 +1,32 @@
-from typing import List, Optional
-from fastapi import FastAPI, Query
+"""
+Sports Schedule API - Main application file
+"""
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from dotenv import load_dotenv
-import models, database
+import models
+import database
 import os
-import redis
-import json
-import requests
 
+# Import routers
+from routes import leagues, matches, redis
+from utils.redis_client import get_redis_connection
+
+# Load environment variables
 load_dotenv()
+
+# Get CORS origins
 origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
 
-app = FastAPI()
+# Initialize FastAPI app
+app = FastAPI(
+    title="Sports Schedule API",
+    description="API for managing sports schedules and matches",
+    version="1.0.0"
+)
+
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -20,129 +35,89 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Create the database tables
+# Create database tables
 models.Base.metadata.create_all(bind=database.engine)
 
-# Headers for external API requests
-headers = { "x-rapidapi-host": os.getenv("API_URL"), "x-rapidapi-key": os.getenv("API_KEY") }
+# Register routers
+app.include_router(leagues.router)
+app.include_router(matches.router)
+app.include_router(redis.router)
 
-# Const
-favorite_leagues = [ 2, 39, 61, 71, 78, 135, 140, 262]
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello, World!"}
-
-@app.get("/ping-db")    
+    """
+    Root endpoint - health check
+    """
+    return {
+        "message": "Sports Schedule API is running",
+        "version": "1.0.0"
+    }
+@app.get("/ping-db")
 def ping_db():
+    """
+    Test database connection
+    Returns 200 if successful, 500 if connection fails
+    """
     db = database.SessionLocal()
     try:
-        yield db
+        # Simple query to test connection
+        db.execute(text("SELECT 1"))
+        return {"message": "Database connection successful"}
     except Exception as e:
-        return {"error": str(e)}
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database connection failed: {str(e)}"
+        )
     finally:
         db.close()
 
-@app.get("/leagues")
-def get_leagues(id: Optional[List[int]] = Query(None)):
+
+@app.get("/health")
+def health_check():
+    """
+    Complete health check - verifies DB and Redis
+    Returns:
+    - 200: All systems operational
+    - 503: Critical service (database) unavailable
+    - 207: Partial success (Redis unavailable but DB operational)
+    """
+    health_status = {
+        "status": "healthy",
+        "database": None,
+        "redis": None
+    }
+    
+    status_code = 200
+    
+    # Check database (CRITICAL)
     db = database.SessionLocal()
     try:
-        query = db.query(models.League).order_by(models.League.id)
-        if id:
-            query = query.filter(models.League.id.in_(id))
-        leagues = query.all()
-        return leagues
+        db.execute(text("SELECT 1"))
+        health_status["database"] = "operational"
     except Exception as e:
-        return {"error": str(e)}
+        health_status["status"] = "unhealthy"
+        health_status["database"] = f"failed: {str(e)}"
+        status_code = 503  # Service Unavailable - Critical failure
     finally:
         db.close()
-
-@app.get("/favorite-leagues")
-def favorite_league():
-    db = database.SessionLocal()
-    try:
-        query = db.query(models.League).filter(models.League.id.in_(favorite_leagues)).order_by(models.League.id)
-        return query.all()
-    except Exception as e:
-        return {"error": str(e)}
-    finally:
-        db.close()
-
-@app.get("/leagues/matches/{date}")
-def get_matches_by_date(date: str):
+    
+    # Check Redis (NON-CRITICAL)
     try:
         r = get_redis_connection()
-        if r is None: 
-            return {"error": "Redis connection failed"} 
-    
-        cached_data  = r.get(str(date))
-        if cached_data:
-            return json.loads(cached_data) 
-
-        url = f"https://{os.getenv("API_URL")}/fixtures?"
-        params = {"date": date}
-        response = requests.get(url, headers=headers,  params=params)
-        response_data = response.json()
-        matches = response_data.get("response", [])    
-
-        filtered_data = [
-            match for match in matches 
-            if match.get("league", {}).get("id") in favorite_leagues
-        ]
-
-        # Store the filtered data in Redis
-        r.set(date, json.dumps(filtered_data))
-
-        return filtered_data
-        
+        if r is None:
+            health_status["redis"] = "connection_failed"
+            if status_code != 503:  # Only if DB is OK
+                health_status["status"] = "degraded"
+                status_code = 207  # Multi-Status - Partial success
+        else:
+            r.ping()
+            health_status["redis"] = "operational"
     except Exception as e:
-        return {"error": "Failed to fetch matches", "details": str(e)}
-
-@app.get("/redis/keys")
-def get_redis_keys():
-    r = get_redis_connection()
-    if r is None:
-        return {"error": "Redis connection failed"}
+        health_status["redis"] = f"failed: {str(e)}"
+        if status_code != 503:  # Only if DB is OK
+            health_status["status"] = "degraded"
+            status_code = 207  # Multi-Status - Partial success
     
-    keys = r.keys("*")
-    sorted_keys = sorted(keys)
-    return {"keys": sorted_keys}
-
-@app.get("/redis/data")
-def get_redis_data():
-    r = get_redis_connection()
-    if r is None:
-        return {"error": "Redis connection failed"}
-    
-    keys = r.keys("*")
-    result = {}
-
-    for key in keys:
-        value = r.get(key)
-        try:
-            result[key] = json.loads(value)
-        except json.JSONDecodeError:
-            result[key] = value
-    return result
-
-@app.delete("/redis/{key}")
-def delete_redis_key(key: str):
-    r = get_redis_connection()
-    if r is None:
-        return {"error": "Redis connection failed"}
-    
-    try:
-        r.delete(key)
-        return {"message": f"Key '{key}' deleted successfully"}
-    except Exception as e:
-        return {"error": str(e)}
-
-def get_redis_connection():
-    try:
-        redis_url = os.getenv("REDIS_URL")
-        redis_client = redis.from_url(redis_url, decode_responses=True)
-        redis_client.ping()
-        return redis_client
-    except Exception as e:
-        print(f"Redis connection failed: {e}")
-        return None     
+    # Return with appropriate status code
+    raise HTTPException(status_code=status_code, detail=health_status)
