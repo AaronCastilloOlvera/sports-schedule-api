@@ -4,7 +4,8 @@ Routes for Match-related endpoints
 import os
 import json
 import requests
-from fastapi import APIRouter
+from datetime import datetime
+from fastapi import APIRouter, Query
 from dotenv import load_dotenv
 from utils.redis_client import get_redis_connection
 
@@ -22,20 +23,31 @@ HEADERS = {
 FAVORITE_LEAGUES = [2, 39, 61, 71, 78, 135, 140, 262]
 
 
-@router.get("/by-date/{date}")
-def get_matches_by_date(date: str):
+@router.get("/by-date")
+def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-MM-DD")):
     """
     Get matches for a specific date, filtered by favorite leagues
+    
+    Parameters:
+    - date: Date in format YYYY-MM-DD (e.g., 2024-12-25)
     """
     try:
+        # Validate date format
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return {
+                "error": "Invalid date format",
+                "details": "Date must be in YYYY-MM-DD format (e.g., 2024-12-25)"
+            }
+        
         r = get_redis_connection()
-        if r is None:
-            return {"error": "Redis connection failed"}
-
-        # Check cache
-        cached_data = r.get(str(date))
-        if cached_data:
-            return json.loads(cached_data)
+        
+        # Check cache if Redis is available
+        if r is not None:
+            cached_data = r.get(str(date))
+            if cached_data:
+                return {"data": json.loads(cached_data), "cached": True}
 
         # Fetch from external API
         url = f"https://{os.getenv('API_URL')}/fixtures?"
@@ -50,10 +62,13 @@ def get_matches_by_date(date: str):
             if match.get("league", {}).get("id") in FAVORITE_LEAGUES
         ]
 
-        # Cache the result
-        r.set(date, json.dumps(filtered_data))
+        # Cache the result if Redis is available
+        if r is not None:
+            r.set(date, json.dumps(filtered_data))
 
-        return filtered_data
+        return {"data": filtered_data, "cached": False}
 
+    except requests.RequestException as e:
+        return {"error": "Failed to fetch from external API", "details": str(e)}
     except Exception as e:
-        return {"error": "Failed to fetch matches", "details": str(e)}
+        return {"error": "Failed to process matches", "details": str(e)}
