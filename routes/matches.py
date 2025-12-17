@@ -41,7 +41,7 @@ def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-
                 "details": "Date must be in YYYY-MM-DD format (e.g., 2024-12-25)"
             }
         
-        r = get_redis_connection()
+        r, redis_error = get_redis_connection()
         
         # Check cache if Redis is available
         if r is not None:
