@@ -8,6 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, Query
 from dotenv import load_dotenv
 from utils.redis_client import get_redis_connection
+from .leagues import FAVORITE_LEAGUES
 
 load_dotenv()
 
@@ -18,10 +19,6 @@ HEADERS = {
     "x-rapidapi-host": os.getenv("API_URL"),
     "x-rapidapi-key": os.getenv("API_KEY")
 }
-
-# Constants
-FAVORITE_LEAGUES = [2, 39, 61, 71, 78, 135, 140, 262]
-
 
 @router.get("/by-date")
 def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-MM-DD")):
@@ -57,9 +54,11 @@ def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-
         matches = response_data.get("response", [])
 
         # Filter by favorite leagues
+        favorite_ids = {league["id"] for league in FAVORITE_LEAGUES}
+
         filtered_data = [
             match for match in matches
-            if match.get("league", {}).get("id") in FAVORITE_LEAGUES
+            if match.get("league", {}).get("id") in favorite_ids
         ]
 
         # Cache the result if Redis is available
