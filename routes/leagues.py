@@ -9,8 +9,16 @@ import database
 router = APIRouter(prefix="/leagues", tags=["leagues"])
 
 # Constants
-FAVORITE_LEAGUES = [2, 39, 61, 71, 78, 135, 140, 262]
-
+FAVORITE_LEAGUES = [
+    {"id": 2,   "name": "UEFA Champions League", "country": "World"},
+    {"id": 39,  "name": "Premier League",        "country": "England"},
+    {"id": 40,  "name": "EFL Championship",      "country": "England"},
+    {"id": 61,  "name": "Ligue 1",               "country": "France"},
+    {"id": 78,  "name": "Bundesliga",            "country": "Germany"},
+    {"id": 135, "name": "Serie A",               "country": "Italy"},
+    {"id": 140, "name": "La Liga",               "country": "Spain"},
+    {"id": 262, "name": "Liga MX",               "country": "Mexico"}
+]
 
 @router.get("")
 def get_leagues(id: Optional[List[int]] = Query(None)):
@@ -38,7 +46,7 @@ def get_favorite_leagues():
     db = database.SessionLocal()
     try:
         query = db.query(models.League).filter(
-            models.League.id.in_(FAVORITE_LEAGUES)
+            models.League.id.in_(FAVORITE_LEAGUES_IDs := [league["id"] for league in FAVORITE_LEAGUES])
         ).order_by(models.League.id)
         return query.all()
     except Exception as e:
