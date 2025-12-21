@@ -24,30 +24,23 @@ def get_redis_keys():
     except Exception as e:
         return {"error": "Failed to retrieve Redis keys", "details": str(e)}
 
-
-@router.get("/data")
-def get_redis_data():
+@router.get("/{key}")
+def get_redis_key(key: str):
     """
-    Get all Redis data
+    Get a specific Redis key
     """
     try:
         r, error = get_redis_connection()
         if r is None:
             return {"error": "Redis connection failed", "details": error}
 
-        keys = r.keys("*")
-        result = {}
-
-        for key in keys:
-            value = r.get(key)
-            try:
-                result[key] = json.loads(value)
-            except json.JSONDecodeError:
-                result[key] = value
-        return result
+        value = r.get(key)
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return value
     except Exception as e:
-        return {"error": "Failed to retrieve Redis data", "details": str(e)}
-
+        return {"error": "Failed to retrieve Redis key", "details": str(e)}
 
 @router.delete("/{key}")
 def delete_redis_key(key: str):
