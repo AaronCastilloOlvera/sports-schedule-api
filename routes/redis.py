@@ -27,7 +27,7 @@ def get_redis_keys():
 @router.get("/{key}")
 def get_redis_key(key: str):
     """
-    Get a specific Redis key
+    Get a specific Redis key. Format Date YYYY-MM-DD for date keys.
     """
     try:
         r, error = get_redis_connection()
@@ -45,7 +45,7 @@ def get_redis_key(key: str):
 @router.delete("/{key}")
 def delete_redis_key(key: str):
     """
-    Delete a specific Redis key
+    Delete a specific Redis key. Format Date YYYY-MM-DD for date keys.
     """
     try:
         r, error = get_redis_connection()
