@@ -11,13 +11,14 @@ router = APIRouter(prefix="/leagues", tags=["leagues"])
 # Constants
 FAVORITE_LEAGUES = [
     {"id": 2,   "name": "UEFA Champions League", "country": "World"},
-    {"id": 39,  "name": "Premier League",        "country": "England"},
-    {"id": 40,  "name": "EFL Championship",      "country": "England"},
-    {"id": 61,  "name": "Ligue 1",               "country": "France"},
-    {"id": 78,  "name": "Bundesliga",            "country": "Germany"},
-    {"id": 135, "name": "Serie A",               "country": "Italy"},
-    {"id": 140, "name": "La Liga",               "country": "Spain"},
-    {"id": 262, "name": "Liga MX",               "country": "Mexico"}
+    {"id": 39,  "name": "Premier League",         "country": "England"},
+    {"id": 40,  "name": "EFL Championship",       "country": "England"},
+    {"id": 61,  "name": "Ligue 1",                "country": "France"},
+    {"id": 78,  "name": "Bundesliga",             "country": "Germany"},
+    {"id": 135, "name": "Serie A",                "country": "Italy"},
+    {"id": 140, "name": "La Liga",                "country": "Spain"},
+    {"id": 262, "name": "Liga MX",                "country": "Mexico"},
+    {"id": 547, "name": "Supercoppa Italiana",    "country": "Italy"}
 ]
 
 @router.get("")
