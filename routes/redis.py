@@ -1,9 +1,15 @@
 """
 Routes for Redis cache management endpoints
 """
+from datetime import datetime
 import json
+import os
+import requests
 from fastapi import APIRouter, HTTPException
+from routes.leagues import FAVORITE_LEAGUES
+from routes.matches import HEADERS
 from utils.redis_client import get_redis_connection
+from fastapi import APIRouter, Query
 
 router = APIRouter(prefix="/redis", tags=["redis"])
 
@@ -17,7 +23,7 @@ def get_redis_keys():
         r, error = get_redis_connection()
         if r is None:
             return {"error": "Redis connection failed", "details": error}
-
+        
         keys = r.keys("*")
         sorted_keys = sorted(keys)
         return {"keys": sorted_keys}
@@ -67,3 +73,53 @@ def delete_redis_key(key: str):
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/refresh-fixtures-cache")
+def refresh_matches_cache(date: str = Query(..., description="Date in format YYYY-MM-DD")):
+    """
+    Refresh the Redis cache for matches on a specific date
+    
+    Parameters:
+    - date: Date in format YYYY-MM-DD (e.g., 2024-12-25)
+    """
+    try:
+        # Validate date format
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            return {
+                "error": "Invalid date format",
+                "details": "Date must be in YYYY-MM-DD format (e.g., 2024-12-25)"
+            }
+        
+        r, redis_error = get_redis_connection()
+        if r is None:
+            return {"error": "Redis connection failed", "details": redis_error}
+
+        # Fetch from external API
+        url = f"https://{os.getenv('API_URL')}/fixtures?"
+        params = {"date": date}
+        response = requests.get(url, headers=HEADERS, params=params)
+        response_data = response.json()
+        matches = response_data.get("response", [])
+
+        print("Fetched matches from external API:", matches)
+
+        # Filter by favorite leagues
+        favorite_ids = {league["id"] for league in FAVORITE_LEAGUES}
+
+        filtered_data = [
+            match for match in matches
+            if match.get("league", {}).get("id") in favorite_ids
+        ]
+
+        # Update cache
+        r.set(date, json.dumps(filtered_data))
+
+        return {"data": filtered_data, "cached": False, "message": "Cache refreshed successfully"}
+
+    except requests.RequestException as e:
+        return {"error": "Failed to fetch from external API", "details": str(e)}
+    except Exception as e:
+        return {"error": "Failed to refresh cache", "details": str(e)}
