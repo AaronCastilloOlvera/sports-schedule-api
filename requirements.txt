@@ -6,3 +6,6 @@ sqlalchemy
 typing
 redis
 requests
+google-genai
+pillow
+python-multipart

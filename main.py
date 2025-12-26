@@ -10,7 +10,7 @@ import database
 import os
 
 # Import routers
-from routes import leagues, matches, redis
+from routes import leagues, matches, redis, bets
 from utils.redis_client import get_redis_connection
 
 # Load environment variables
@@ -42,7 +42,7 @@ models.Base.metadata.create_all(bind=database.engine)
 app.include_router(leagues.router)
 app.include_router(matches.router)
 app.include_router(redis.router)
-
+app.include_router(bets.router)
 
 @app.get("/")
 def read_root():
