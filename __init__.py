@@ -1,2 +1,2 @@
-from . import database
-from . import models
+from .utils import database, models
+from .routes import leagues, matches, redis, bets

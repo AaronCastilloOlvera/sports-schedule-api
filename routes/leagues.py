@@ -3,8 +3,8 @@ Routes for League-related endpoints
 """
 from typing import List, Optional
 from fastapi import APIRouter, Query
-import models
-import database
+from utils import database
+import utils.models as models
 
 router = APIRouter(prefix="/leagues", tags=["leagues"])
 

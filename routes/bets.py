@@ -6,11 +6,30 @@ import io
 import json
 import os
 from dotenv import load_dotenv
+from utils import database, schemas, crud
+from sqlalchemy.orm import Session
+from fastapi import Depends
 
 load_dotenv()
 
-router = APIRouter(prefix="/bets", tags=["bets"])
+router = APIRouter(prefix="/bets", tags=["Bets"])
 client = genai.Client(api_key=os.getenv("GENAI_API_KEY"))
+
+@router.post("/", response_model=schemas.BettingTicket)
+def create_betting_ticket(ticket: schemas.BettingTicketCreate, db: Session = Depends(database.get_db)):
+  """
+  Create a new betting ticket.
+  """
+  return crud.create_betting_ticket(db=db, ticket=ticket)
+
+@router.get("/", response_model=list[schemas.BettingTicket])
+def read_betting_tickets(db: Session = Depends(database.get_db)):
+  """
+  Retrieve all betting tickets.
+  """
+  return crud.get_all_betting_tickets(db)
+
+
 
 @router.post("/analyze-ticket")
 async def analyze_betting_ticket(file: UploadFile = File(...)):
@@ -34,7 +53,7 @@ async def analyze_betting_ticket(file: UploadFile = File(...)):
       "payout": 350.0,
       "net_profit": 150.0,
       "status": "won",
-      "bet_description": "Club América vs Chivas",
+      "match_name": "Club América vs Chivas",
       "isParley": False,
       "isCreateBet": False,
       "match_datetime": "2025-12-26T15:30:00",
@@ -51,7 +70,7 @@ async def analyze_betting_ticket(file: UploadFile = File(...)):
       "3. 'pick': Extract only what was chosen (e.g., 'Over 2.5', 'Both teams to score'). "
       "4. 'status': use 'pending' unless the ticket explicitly says 'won'/'paid' or 'lost'. "
       "5. 'net_profit': Calculate Payout minus Stake. "
-      "6. 'bet_description': Clean description. Remove 'incl. Prorroga' or 'Moneyline'. "
+      "6. 'match_name': Format as 'Team A vs Team B'. "
       "7. 'isParley': Set to true if there are 2 or more DIFFERENT matches. "
       "8. 'isCreateBet': Set to true if there are 2 or more selections for the SAME match. "
       "9. 'device_type': Detect if the layout is from a mobile app ('movil') or web browser ('desktop'). "
@@ -62,7 +81,7 @@ async def analyze_betting_ticket(file: UploadFile = File(...)):
     )
     
     response = client.models.generate_content(
-      model="gemini-2.5-flash",
+      model="gemini-2.5-flash-lite",
       contents=[img, prompt],
       config=types.GenerateContentConfig(
           response_mime_type="application/json",
