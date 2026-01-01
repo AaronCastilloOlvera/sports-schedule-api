@@ -13,8 +13,7 @@ class BettingTicketBase(BaseModel):
     net_profit: float
     status: str = "pending"  # 'pending', 'won', 'lost'
     match_name: str
-    is_parley: bool = False
-    is_create_bet: bool = False
+    bet_type: Optional[str] = None
     match_datetime: datetime
     device_type: str  # 'movil' or 'desktop'
     studied: bool = False

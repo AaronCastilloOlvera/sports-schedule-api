@@ -25,8 +25,7 @@ class BettingTicket(Base):
     net_profit = Column(Float)
     status = Column(String, default="pending") # 'pending', 'won', 'lost'
     match_name = Column(String)
-    is_parley = Column(Boolean, default=False)
-    is_create_bet = Column(Boolean, default=False)
+    bet_type = Column(String, nullable=True)
     match_datetime = Column(DateTime)
     device_type = Column(String)  # 'movil' or 'desktop'
     studied = Column(Boolean, default=False)
