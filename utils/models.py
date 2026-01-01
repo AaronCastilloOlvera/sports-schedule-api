@@ -32,4 +32,5 @@ class BettingTicket(Base):
     comments = Column(String, default="")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    image_path = Column(String, nullable=True)
     
