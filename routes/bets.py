@@ -1,26 +1,71 @@
-from fastapi import APIRouter, UploadFile, File
-from PIL import Image
-from google.genai import types
 import google.genai as genai
 import io
 import json
 import os
+from fastapi import APIRouter, UploadFile, File
+from PIL import Image
+from google.genai import types
 from dotenv import load_dotenv
 from utils import database, schemas, crud
 from sqlalchemy.orm import Session
-from fastapi import Depends
+from fastapi import Depends, Form, HTTPException
+from datetime import date
+from typing import Union, Optional
+from datetime import timezone
+from dateutil import parser
 
 load_dotenv()
 
 router = APIRouter(prefix="/bets", tags=["Bets"])
 client = genai.Client(api_key=os.getenv("GENAI_API_KEY"))
 
-@router.post("/", response_model=schemas.BettingTicket)
-def create_betting_ticket(ticket: schemas.BettingTicketCreate, db: Session = Depends(database.get_db)):
+@router.post("/create-ticket")
+async def create_betting_ticket(
+  ticket_id: str = Form(...),
+  bet_type: str = Form(...),
+  pick: str = Form(...),
+  sport: str = Form(...),
+  league: str = Form(...),
+  match_name: str = Form(...),
+  match_datetime: Optional[str] = Form(None),
+  odds: float = Form(...),
+  stake: float = Form(...),
+  payout: float = Form(...),
+  net_profit: float = Form(...),  
+  status: str = Form("pending"),
+  device_type: str = Form(...),
+  studied: bool = Form(default=False),
+  comments: str = Form(...),
+  file: Union[UploadFile, str, None] = File(None),
+  db: Session = Depends(database.get_db)
+):
   """
-  Create a new betting ticket.
+  Create a new betting ticket.  
   """
-  return crud.create_betting_ticket(db=db, ticket=ticket)
+  try:
+    ticket_payload = {
+      "ticket_id":ticket_id,
+      "bet_type":bet_type,
+      "pick":pick,
+      "sport":sport,
+      "league":league,
+      "match_name":match_name,
+      "match_datetime":convert_to_utc(match_datetime),
+      "odds":odds,
+      "stake":stake,
+      "payout":payout,
+      "net_profit":net_profit,
+      "status":status,
+      "device_type":device_type,
+      "studied":studied,
+      "comments":comments
+    }
+
+    return crud.create_betting_ticket(db, ticket_payload, file)
+  
+  except Exception as e:
+    db.rollback()
+    raise HTTPException(status_code=500, detail=f"Failed to create betting ticket: {str(e)}")
 
 @router.get("/", response_model=list[schemas.BettingTicket])
 def read_betting_tickets(db: Session = Depends(database.get_db)):
@@ -28,8 +73,6 @@ def read_betting_tickets(db: Session = Depends(database.get_db)):
   Retrieve all betting tickets.
   """
   return crud.get_all_betting_tickets(db)
-
-
 
 @router.post("/analyze-ticket")
 async def analyze_betting_ticket(file: UploadFile = File(...)):
@@ -94,3 +137,8 @@ async def analyze_betting_ticket(file: UploadFile = File(...)):
   except Exception as e:
     return {"error": f"Failed to read file: {str(e)}"}
 
+def convert_to_utc(date_str: str):    
+    dt = parser.parse(date_str)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)

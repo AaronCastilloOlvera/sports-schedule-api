@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean
 from .database import Base
 import datetime
 
@@ -26,7 +26,7 @@ class BettingTicket(Base):
     status = Column(String, default="pending") # 'pending', 'won', 'lost'
     match_name = Column(String)
     bet_type = Column(String, nullable=True)
-    match_datetime = Column(DateTime)
+    match_datetime = Column(DateTime(timezone=True), nullable=False)
     device_type = Column(String)  # 'movil' or 'desktop'
     studied = Column(Boolean, default=False)
     comments = Column(String, default="")

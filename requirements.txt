@@ -10,3 +10,4 @@ google-genai
 pillow
 python-multipart
 alembic
+python-dateutil
