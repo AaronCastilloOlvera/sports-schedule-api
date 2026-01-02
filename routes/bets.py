@@ -13,6 +13,7 @@ from datetime import date
 from typing import Union, Optional
 from datetime import timezone
 from dateutil import parser
+from services.bet_service import BetService
 
 load_dotenv()
 
@@ -43,6 +44,9 @@ async def create_betting_ticket(
   Create a new betting ticket.  
   """
   try:
+
+    bet_service = BetService(db)
+
     ticket_payload = {
       "ticket_id":ticket_id,
       "bet_type":bet_type,
@@ -61,7 +65,7 @@ async def create_betting_ticket(
       "comments":comments
     }
 
-    return crud.create_betting_ticket(db, ticket_payload, file)
+    return bet_service.create_ticket(ticket_payload, file)
   
   except Exception as e:
     db.rollback()
@@ -72,7 +76,9 @@ def read_betting_tickets(db: Session = Depends(database.get_db)):
   """
   Retrieve all betting tickets.
   """
-  return crud.get_all_betting_tickets(db)
+  bet_service = BetService(db)
+
+  return bet_service.get_tickets()
 
 @router.post("/analyze-ticket")
 async def analyze_betting_ticket(file: UploadFile = File(...)):
