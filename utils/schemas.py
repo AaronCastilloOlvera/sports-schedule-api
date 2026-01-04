@@ -14,6 +14,7 @@ class BettingTicketBase(BaseModel):
     status: str = "pending"  # 'pending', 'won', 'lost'
     match_name: str
     bet_type: Optional[str] = None
+    image_path: Optional[str] = None
     match_datetime: datetime
     device_type: str  # 'movil' or 'desktop'
     studied: bool = False
