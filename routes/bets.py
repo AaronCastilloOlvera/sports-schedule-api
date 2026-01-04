@@ -20,56 +20,6 @@ load_dotenv()
 router = APIRouter(prefix="/bets", tags=["Bets"])
 client = genai.Client(api_key=os.getenv("GENAI_API_KEY"))
 
-@router.post("/create-ticket")
-async def create_betting_ticket(
-  ticket_id: str = Form(...),
-  bet_type: str = Form(...),
-  pick: str = Form(...),
-  sport: str = Form(...),
-  league: str = Form(...),
-  match_name: str = Form(...),
-  match_datetime: Optional[str] = Form(None),
-  odds: float = Form(...),
-  stake: float = Form(...),
-  payout: float = Form(...),
-  net_profit: float = Form(...),  
-  status: str = Form("pending"),
-  device_type: str = Form(...),
-  studied: bool = Form(default=False),
-  comments: str = Form(...),
-  file: Union[UploadFile, str, None] = File(None),
-  db: Session = Depends(database.get_db)
-):
-  """
-  Create a new betting ticket.  
-  """
-  try:
-
-    bet_service = BetService(db)
-
-    ticket_payload = {
-      "ticket_id":ticket_id,
-      "bet_type":bet_type,
-      "pick":pick,
-      "sport":sport,
-      "league":league,
-      "match_name":match_name,
-      "match_datetime":convert_to_utc(match_datetime),
-      "odds":odds,
-      "stake":stake,
-      "payout":payout,
-      "net_profit":net_profit,
-      "status":status,
-      "device_type":device_type,
-      "studied":studied,
-      "comments":comments
-    }
-
-    return bet_service.create_ticket(ticket_payload, file)
-  
-  except Exception as e:
-    db.rollback()
-    raise HTTPException(status_code=500, detail=f"Failed to create betting ticket: {str(e)}")
 
 @router.get("/", response_model=list[schemas.BettingTicket])
 def read_betting_tickets(db: Session = Depends(database.get_db)):
@@ -79,6 +29,46 @@ def read_betting_tickets(db: Session = Depends(database.get_db)):
   bet_service = BetService(db)
 
   return bet_service.get_tickets()
+
+@router.get("/get-ticket-by-id")
+def get_ticket_by_id(ticket_id: str, db: Session = Depends(database.get_db)):
+  bet_service = BetService(db)
+  return bet_service.get_ticket_by_id(ticket_id)
+
+@router.post("/create-ticket")
+async def create_betting_ticket(ticket: schemas.BettingTicketCreate, db: Session = Depends(database.get_db)):
+  """
+  Create a new betting ticket.
+  """
+  bet_service = BetService(db)
+  return bet_service.create_ticket(ticket.dict())
+
+@router.put("/update-ticket")
+def update_betting_ticket(ticket: schemas.BettingTicketCreate, db: Session = Depends(database.get_db)):
+  """
+  Update a betting ticket by its ID.
+  """
+  bet_service = BetService(db)
+  return bet_service.update_ticket(ticket.ticket_id, ticket.dict())
+
+@router.delete("/delete-ticket")
+def delete_betting_ticket(ticket_id: str, db: Session = Depends(database.get_db)):
+  """
+  Delete a betting ticket by its ID.
+  """
+  bet_service = BetService(db)
+  return bet_service.delete_ticket(ticket_id)
+
+@router.post("/upload-ticket-image")
+async def upload_ticket_image(ticket_id: str, file: UploadFile = File(...), db: Session = Depends(database.get_db)):
+  """
+  Upload an image for a betting ticket by its ID.
+  """
+  bet_service = BetService(db)
+  success = bet_service.update_ticket_image(ticket_id, file)
+  if not success:
+    return {"message": "Failed to upload image"}
+  return {"message": "Image uploaded successfully"}
 
 @router.post("/analyze-ticket")
 async def analyze_betting_ticket(file: UploadFile = File(...)):
