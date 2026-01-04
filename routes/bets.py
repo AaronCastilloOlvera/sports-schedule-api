@@ -9,8 +9,6 @@ from dotenv import load_dotenv
 from utils import database, schemas, crud
 from sqlalchemy.orm import Session
 from fastapi import Depends, Form, HTTPException
-from datetime import date
-from typing import Union, Optional
 from datetime import timezone
 from dateutil import parser
 from services.bet_service import BetService
@@ -20,14 +18,9 @@ load_dotenv()
 router = APIRouter(prefix="/bets", tags=["Bets"])
 client = genai.Client(api_key=os.getenv("GENAI_API_KEY"))
 
-
-@router.get("/", response_model=list[schemas.BettingTicket])
+@router.get("/get-tickets", response_model=list[schemas.BettingTicket])
 def read_betting_tickets(db: Session = Depends(database.get_db)):
-  """
-  Retrieve all betting tickets.
-  """
   bet_service = BetService(db)
-
   return bet_service.get_tickets()
 
 @router.get("/get-ticket-by-id")
