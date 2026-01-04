@@ -59,9 +59,7 @@ FAVORITE_LEAGUES = [
     {"id": 179, "name": "Scottish Premiership",      "country": "Scotland",    "emoji": "🏴󠁧󠁢󠁳󠁣󠁴󠁿"},
 
     # --- ASIA, OCEANÍA & OTROS ---
-    {"id": 307, "name": "Saudi Pro League",          "country": "Saudi Arabia", "emoji": "🇸🇦"},
-    {"id": 98,  "name": "J1 League",                 "country": "Japan",       "emoji": "🇯🇵"},
-    {"id": 188, "name": "A-League",                  "country": "Australia",   "emoji": "🇦🇺"}
+    {"id": 307, "name": "Saudi Pro League",          "country": "Saudi Arabia", "emoji": "🇸🇦"}
 ]
 
 @router.get("")
