@@ -43,7 +43,6 @@ FAVORITE_LEAGUES = [
     # --- MÉXICO ---
     {"id": 262, "name": "Liga MX",                   "country": "Mexico",  "emoji": "🇲🇽"},
     {"id": 263, "name": "Liga de Expansión MX",      "country": "Mexico",  "emoji": "🇲🇽"},
-    {"id": 673, "name": "Liga MX Femenil",           "country": "Mexico",  "emoji": "🇲🇽"},
 
     # --- RESTO DE AMÉRICA ---
     {"id": 253, "name": "MLS",                       "country": "USA",     "emoji": "🇺🇸"},
