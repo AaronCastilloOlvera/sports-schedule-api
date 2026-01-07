@@ -9,7 +9,7 @@ from utils import models, database
 import os
 
 # Import routers
-from routes import leagues, matches, redis, bets
+from routes import leagues, matches, redis, bets, dev_tools
 from utils.redis_client import get_redis_connection
 
 # Load environment variables
@@ -42,6 +42,7 @@ app.include_router(leagues.router)
 app.include_router(matches.router)
 app.include_router(redis.router)
 app.include_router(bets.router)
+app.include_router(dev_tools.router)
 
 @app.get("/")
 def read_root():
