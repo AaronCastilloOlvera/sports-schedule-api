@@ -33,3 +33,15 @@ venv\Scripts\activate.bat
 ```bash
 uvicorn main:app --reload
 ```
+
+
+
+# How to create an Migration
+
+```bash
+alembic revision --autogenerate -m "message of migration"
+```
+
+```bash
+alembic upgrade head
+```

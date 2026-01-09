@@ -10,6 +10,7 @@ class League(Base):
     type = Column(String, index=True)
     logo = Column(String, index=True)
     country_id = Column(String, index=True)
+    is_favorite = Column(Boolean, default=False)
 
 class BettingTicket(Base):
     __tablename__ = "betting_tickets"

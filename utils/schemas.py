@@ -2,6 +2,20 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import Optional
 
+class LeagueBase(BaseModel):
+    id: int
+    name: str
+    type: str
+    logo: str
+    country_id: str
+    is_favorite: bool = False
+
+class League(LeagueBase):
+    id: int
+    
+    class Config:
+        orm_mode = True
+
 class BettingTicketBase(BaseModel):
     ticket_id: str
     sport: str = "Futbol"
