@@ -12,7 +12,25 @@ class LeagueBase(BaseModel):
 
 class League(LeagueBase):
     id: int
-    
+
+    class Config:
+        orm_mode = True
+
+class CountryBase(BaseModel):
+    name: str
+    code: str
+    flag: str
+
+class Country(CountryBase):
+    id: int
+
+    class Config:
+        orm_mode = True
+
+class LeagueResponse(BaseModel):
+    league: League
+    country: Country
+
     class Config:
         orm_mode = True
 

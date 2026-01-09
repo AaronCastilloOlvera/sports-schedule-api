@@ -1,96 +1,106 @@
 """
 Routes for League-related endpoints
 """
-from typing import List, Optional
-from fastapi import APIRouter, Query
-from utils import database
+import os
+from utils.constants import FAVORITE_LEAGUES, HEADERS
 import utils.models as models
+import requests
+from sqlalchemy.orm import Session
+from typing import List, Optional
+from fastapi import APIRouter, Query, Depends, HTTPException
+from utils import database
+from sqlalchemy.orm import Session
 
 router = APIRouter(prefix="/leagues", tags=["leagues"])
 
-# Constants
-FAVORITE_LEAGUES = [
-    # --- CONTINENTALES ---
-    {"id": 2,   "name": "UEFA Champions League",     "country": "World",   "emoji": "🌍"},
-    {"id": 3,   "name": "UEFA Europa League",        "country": "World",   "emoji": "🌍"},
-    {"id": 848, "name": "UEFA Conference League",    "country": "World",   "emoji": "🌍"},
-    {"id": 13,  "name": "Copa Libertadores",         "country": "World",   "emoji": "🏆"},
-    {"id": 11,  "name": "Copa Sudamericana",         "country": "World",   "emoji": "🏆"},
-
-    # --- INGLATERRA ---
-    {"id": 39,  "name": "Premier League",            "country": "England", "emoji": "🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
-    {"id": 40,  "name": "EFL Championship",          "country": "England", "emoji": "🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
-    {"id": 45,  "name": "FA Cup",                    "country": "England", "emoji": "🏴󠁧󠁢󠁥󠁮󠁧󠁿"},
-
-    # --- ESPAÑA ---
-    {"id": 140, "name": "La Liga",                   "country": "Spain",   "emoji": "🇪🇸"},
-    {"id": 143, "name": "Copa del Rey",              "country": "Spain",   "emoji": "🇪🇸"},
-
-    # --- ITALIA ---
-    {"id": 135, "name": "Serie A",                   "country": "Italy",   "emoji": "🇮🇹"},
-    {"id": 137, "name": "Coppa Italia",              "country": "Italy",   "emoji": "🇮🇹"},
-    {"id": 547, "name": "Supercoppa Italiana",       "country": "Italy",   "emoji": "🇮🇹"},
-
-    # --- ALEMANIA ---
-    {"id": 78,  "name": "Bundesliga",                "country": "Germany", "emoji": "🇩🇪"},
-    {"id": 79,  "name": "2. Bundesliga",             "country": "Germany", "emoji": "🇩🇪"},
-    {"id": 81,  "name": "DFB Pokal",                 "country": "Germany", "emoji": "🇩🇪"},
-
-    # --- FRANCIA ---
-    {"id": 61,  "name": "Ligue 1",                   "country": "France",  "emoji": "🇫🇷"},
-    {"id": 66,  "name": "Coupe de France",           "country": "France",  "emoji": "🇫🇷"},
-
-    # --- MÉXICO ---
-    {"id": 262, "name": "Liga MX",                   "country": "Mexico",  "emoji": "🇲🇽"},
-    {"id": 263, "name": "Liga de Expansión MX",      "country": "Mexico",  "emoji": "🇲🇽"},
-
-    # --- RESTO DE AMÉRICA ---
-    {"id": 253, "name": "MLS",                       "country": "USA",     "emoji": "🇺🇸"},
-    {"id": 71,  "name": "Série A",                   "country": "Brazil",  "emoji": "🇧🇷"},
-    {"id": 73,  "name": "Copa Do Brasil",            "country": "Brazil",  "emoji": "🇧🇷"},
-    {"id": 128, "name": "Liga Profesional",          "country": "Argentina", "emoji": "🇦🇷"},
-    {"id": 34,  "name": "WC Qualification South America", "country": "World", "emoji": "🌎"},
-
-    # --- EUROPA (TALENTO & MERCADO) ---
-    {"id": 88,  "name": "Eredivisie",                "country": "Netherlands", "emoji": "🇳🇱"},
-    {"id": 94,  "name": "Primeira Liga",             "country": "Portugal",    "emoji": "🇵🇹"},
-    {"id": 203, "name": "Süper Lig",                 "country": "Turkey",      "emoji": "🇹🇷"},
-    {"id": 179, "name": "Scottish Premiership",      "country": "Scotland",    "emoji": "🏴󠁧󠁢󠁳󠁣󠁴󠁿"},
-
-    # --- ASIA, OCEANÍA & OTROS ---
-    {"id": 307, "name": "Saudi Pro League",          "country": "Saudi Arabia", "emoji": "🇸🇦"}
-]
-
 @router.get("")
 def get_leagues(id: Optional[List[int]] = Query(None)):
-    """
-    Get all leagues or filter by specific IDs
-    """
-    db = database.SessionLocal()
-    try:
-        query = db.query(models.League).order_by(models.League.id)
-        if id:
-            query = query.filter(models.League.id.in_(id))
-        leagues = query.all()
-        return leagues
-    except Exception as e:
-        return {"error": str(e)}
-    finally:
-        db.close()
+  """
+  Get all leagues or filter by specific IDs
+  """
+  db = database.SessionLocal()
+  try:
+      query = db.query(models.League).order_by(models.League.id)
+      if id:
+          query = query.filter(models.League.id.in_(id))
+      leagues = query.all()
+      return leagues
+  except Exception as e:
+      return {"error": str(e)}
+  finally:
+      db.close()
 
 
 @router.get("/favorite")
 def get_favorite_leagues():
-    """
-    Get all favorite leagues
-    """
-    db = database.SessionLocal()
-    try:
-        query = db.query(models.League).filter(
-            models.League.id.in_(FAVORITE_LEAGUES_IDs := [league["id"] for league in FAVORITE_LEAGUES])
-        ).order_by(models.League.id)
-        return query.all()
-    except Exception as e:
-        return {"error": str(e)}
-    finally:
-        db.close()
+  """
+  Get all favorite leagues
+  """
+  db = database.SessionLocal()
+  try:
+      query = db.query(models.League).filter(
+          models.League.id.in_(FAVORITE_LEAGUES_IDs := [league["id"] for league in FAVORITE_LEAGUES])
+      ).order_by(models.League.id)
+      return query.all()
+  except Exception as e:
+      return {"error": str(e)}
+  finally:
+      db.close()
+
+
+@router.get("/sync-api-leagues")
+def sync_api_leagues(db: Session = Depends(database.get_db)):
+  
+  url = f"https://{os.getenv('API_URL')}/leagues?season=2025"  
+
+  try:
+    response = requests.get(url, headers=HEADERS)
+    response.raise_for_status() 
+    data = response.json()
+
+    league_list = data.get("response", [])
+
+    if not league_list:
+      raise HTTPException(status_code=404, detail="No leagues found in API response")
+    
+    total_saved = save_league_to_db(db, league_list)
+
+    return {"message": f"Successfully saved {total_saved} leagues to database"}
+
+  except requests.RequestException as e:
+    db.rollback()
+    raise HTTPException(status_code=500, detail=f"API request error: {str(e)}")
+
+def save_league_to_db(db: Session, api_response: list):
+    for item in api_response:
+        country_data = item.get("country")
+        league_data = item.get("league")
+        
+        country_name = country_data.get("name")
+        
+        db_country = db.query(models.Country).filter(models.Country.name == country_name).first()
+
+        if db_country:
+            db_country.code = country_data.get("code")
+            db_country.flag = country_data.get("flag")
+        else:
+            db_country = models.Country(
+                name=country_name,
+                code=country_data.get("code"),
+                flag=country_data.get("flag")
+            )
+            db.add(db_country)
+            db.flush() 
+
+        db_league = models.League(
+            id=league_data.get("id"),
+            name=league_data.get("name"),
+            type=league_data.get("type"),
+            logo=league_data.get("logo"),
+            country_id=db_country.id, 
+            is_favorite=False
+        )
+        db.merge(db_league)
+        
+    db.commit()
+    return len(api_response)
