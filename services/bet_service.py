@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session
 from fastapi import UploadFile
-from utils import models
+import models
 import os
 
 class BetService:

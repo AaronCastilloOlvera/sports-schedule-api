@@ -5,7 +5,8 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from dotenv import load_dotenv
-from utils import models, database
+from utils import database
+from models import base as models
 import os
 
 # Import routers

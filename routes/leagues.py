@@ -3,7 +3,7 @@ Routes for League-related endpoints
 """
 import os
 from utils.constants import FAVORITE_LEAGUES, HEADERS
-import utils.models as models
+import models
 import requests
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -101,6 +101,6 @@ def save_league_to_db(db: Session, api_response: list):
             is_favorite=False
         )
         db.merge(db_league)
-        
+
     db.commit()
     return len(api_response)

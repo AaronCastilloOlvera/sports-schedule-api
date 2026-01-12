@@ -6,7 +6,7 @@ from fastapi import APIRouter, UploadFile, File
 from PIL import Image
 from google.genai import types
 from dotenv import load_dotenv
-from utils import database, schemas, crud
+from utils import database, schemas
 from sqlalchemy.orm import Session
 from fastapi import Depends, Form, HTTPException
 from datetime import timezone
