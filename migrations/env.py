@@ -4,7 +4,6 @@ from sqlalchemy import pool
 from alembic import context
 from dotenv import load_dotenv
 from utils.database import Base
-from utils.models import BettingTicket
 import os
 
 load_dotenv()
