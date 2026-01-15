@@ -4,7 +4,7 @@ Routes for League-related endpoints
 import os
 import models
 import requests
-from utils.constants import FAVORITE_LEAGUES, HEADERS
+from utils.constants import HEADERS
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from fastapi import APIRouter, Query, Depends, HTTPException
@@ -56,22 +56,21 @@ def update_league(league_id: int, is_favorite: bool, db: Session = Depends(datab
   db.refresh(league)
   return league
 
-@router.get("/favorite")
+@router.get("/favorite-leagues", response_model=List[LeagueOut])
 def get_favorite_leagues():
   """
   Get all favorite leagues
   """
   db = database.SessionLocal()
   try:
-      query = db.query(models.League).filter(
-          models.League.id.in_(FAVORITE_LEAGUES_IDs := [league["id"] for league in FAVORITE_LEAGUES])
-      ).order_by(models.League.id)
+      query = db.query(models.League).options(joinedload(models.League.country))
+      query = query \
+         .filter(models.League.is_favorite == True).order_by(models.League.id)
       return query.all()
   except Exception as e:
       return {"error": str(e)}
   finally:
       db.close()
-
 
 
 @router.get("/sync-api-leagues")

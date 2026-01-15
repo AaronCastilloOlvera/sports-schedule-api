@@ -5,10 +5,12 @@ import os
 import json
 import requests
 from datetime import datetime
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends
+from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 from utils.redis_client import get_redis_connection
-from .leagues import FAVORITE_LEAGUES
+from utils import database
+import models
 
 load_dotenv()
 
@@ -21,7 +23,7 @@ HEADERS = {
 }
 
 @router.get("/by-date")
-def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-MM-DD")):
+def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-MM-DD"), db: Session = Depends(database.get_db)):
     """
     Get matches for a specific date, filtered by favorite leagues
     
@@ -54,7 +56,8 @@ def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-
         matches = response_data.get("response", [])
 
         # Filter by favorite leagues
-        favorite_ids = {league["id"] for league in FAVORITE_LEAGUES}
+        favorite_leagues = db.query(models.League).filter(models.League.is_favorite == True).all()
+        favorite_ids = {league.id for league in favorite_leagues}
 
         filtered_data = [
             match for match in matches
