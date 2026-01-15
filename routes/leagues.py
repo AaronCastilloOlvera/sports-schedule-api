@@ -32,7 +32,17 @@ def get_leagues(id: Optional[List[int]] = Query(None)):
   finally:
       db.close()
 
-@router.put("update-legue")
+@router.get("get-league-by-id", response_model=LeagueOut)
+def get_league_by_id(league_id: int, db: Session = Depends(database.get_db)):
+  """
+  Get a league by its ID
+  """
+  league = db.query(models.League).options(joinedload(models.League.country)).filter(models.League.id == league_id).first()
+  if not league:
+      raise HTTPException(status_code=404, detail="League not found")
+  return league
+
+@router.put("update-league")
 def update_league(league_id: int, is_favorite: bool, db: Session = Depends(database.get_db)):
   """
   Update the favorite status of a league
