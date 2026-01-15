@@ -8,6 +8,7 @@ from datetime import datetime
 from fastapi import APIRouter, Query, Depends
 from sqlalchemy.orm import Session
 from dotenv import load_dotenv
+from utils.constants import HEADERS
 from utils.redis_client import get_redis_connection
 from utils import database
 import models
@@ -16,11 +17,6 @@ load_dotenv()
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
-# Headers for external API requests
-HEADERS = {
-    "x-rapidapi-host": os.getenv("API_URL"),
-    "x-rapidapi-key": os.getenv("API_KEY")
-}
 
 @router.get("/by-date")
 def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-MM-DD"), db: Session = Depends(database.get_db)):

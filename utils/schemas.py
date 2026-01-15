@@ -14,7 +14,7 @@ class League(LeagueBase):
     id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class CountryBase(BaseModel):
     name: str
@@ -22,20 +22,20 @@ class CountryBase(BaseModel):
     flag: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class Country(CountryBase):
     id: int
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class LeagueResponse(BaseModel):
     league: League
     country: Country
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class LeagueOut(BaseModel):
     id: int
@@ -75,4 +75,4 @@ class BettingTicket(BettingTicketBase):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
