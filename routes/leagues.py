@@ -32,6 +32,19 @@ def get_leagues(id: Optional[List[int]] = Query(None)):
   finally:
       db.close()
 
+@router.put("update-legue")
+def update_league(league_id: int, is_favorite: bool, db: Session = Depends(database.get_db)):
+  """
+  Update the favorite status of a league
+  """
+  league = db.query(models.League).filter(models.League.id == league_id).first()
+  if not league:
+      raise HTTPException(status_code=404, detail="League not found")
+  
+  league.is_favorite = is_favorite
+  db.commit()
+  db.refresh(league)
+  return league
 
 @router.get("/favorite")
 def get_favorite_leagues():
@@ -48,6 +61,7 @@ def get_favorite_leagues():
       return {"error": str(e)}
   finally:
       db.close()
+
 
 
 @router.get("/sync-api-leagues")
