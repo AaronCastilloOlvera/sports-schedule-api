@@ -48,7 +48,7 @@ def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-
 
         # Fetch from external API
         url = f"https://{os.getenv('API_URL')}/fixtures?"
-        params = {"date": date}
+        params = { "date": date, "timezone": "America/Mexico_City" }
         response = requests.get(url, headers=HEADERS, params=params)
         response_data = response.json()
         matches = response_data.get("response", [])
