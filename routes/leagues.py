@@ -12,6 +12,7 @@ from utils import database
 from sqlalchemy.orm import Session
 from utils.schemas import LeagueOut
 
+
 router = APIRouter(prefix="/leagues", tags=["leagues"])
 
 @router.get("", response_model=List[LeagueOut])
