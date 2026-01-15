@@ -18,8 +18,11 @@ class League(LeagueBase):
 
 class CountryBase(BaseModel):
     name: str
-    code: str
-    flag: str
+    code: Optional[str] = None
+    flag: Optional[str] = None
+
+    class Config:
+        orm_mode = True
 
 class Country(CountryBase):
     id: int
@@ -33,6 +36,18 @@ class LeagueResponse(BaseModel):
 
     class Config:
         orm_mode = True
+
+class LeagueOut(BaseModel):
+    id: int
+    name: str
+    type: str
+    logo: str
+    is_favorite: bool
+    country_id: int
+    country: Optional[CountryBase] = None 
+
+    class Config:
+        from_attributes = True
 
 class BettingTicketBase(BaseModel):
     ticket_id: str

@@ -2,25 +2,27 @@
 Routes for League-related endpoints
 """
 import os
-from utils.constants import FAVORITE_LEAGUES, HEADERS
 import models
 import requests
-from sqlalchemy.orm import Session
+from utils.constants import FAVORITE_LEAGUES, HEADERS
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from fastapi import APIRouter, Query, Depends, HTTPException
 from utils import database
 from sqlalchemy.orm import Session
+from utils.schemas import LeagueOut
 
 router = APIRouter(prefix="/leagues", tags=["leagues"])
 
-@router.get("")
+@router.get("", response_model=List[LeagueOut])
 def get_leagues(id: Optional[List[int]] = Query(None)):
   """
   Get all leagues or filter by specific IDs
   """
   db = database.SessionLocal()
   try:
-      query = db.query(models.League).order_by(models.League.id)
+      query = db.query(models.League).options(joinedload(models.League.country)).order_by(models.League.id)
+      
       if id:
           query = query.filter(models.League.id.in_(id))
       leagues = query.all()
