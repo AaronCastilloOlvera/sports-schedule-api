@@ -16,11 +16,10 @@ from utils.schemas import LeagueOut
 router = APIRouter(prefix="/leagues", tags=["leagues"])
 
 @router.get("", response_model=List[LeagueOut])
-def get_leagues(id: Optional[List[int]] = Query(None)):
+def get_leagues(id: Optional[List[int]] = Query(None), db: Session = Depends(database.get_db)):
   """
   Get all leagues or filter by specific IDs
   """
-  db = database.SessionLocal()
   try:
       query = db.query(models.League).options(joinedload(models.League.country)).order_by(models.League.id)
       
@@ -29,9 +28,7 @@ def get_leagues(id: Optional[List[int]] = Query(None)):
       leagues = query.all()
       return leagues
   except Exception as e:
-      return {"error": str(e)}
-  finally:
-      db.close()
+      raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/get-league-by-id", response_model=LeagueOut)
 def get_league_by_id(league_id: int, db: Session = Depends(database.get_db)):
