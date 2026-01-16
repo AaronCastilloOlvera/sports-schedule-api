@@ -55,26 +55,34 @@ def update_league(league_id: int, is_favorite: bool, db: Session = Depends(datab
   return league
 
 @router.get("/favorite-leagues", response_model=List[LeagueOut])
-def get_favorite_leagues():
+def get_favorite_leagues(db: Session = Depends(database.get_db)):
   """
   Get all favorite leagues
   """
-  db = database.SessionLocal()
   try:
       query = db.query(models.League).options(joinedload(models.League.country))
       query = query \
          .filter(models.League.is_favorite == True).order_by(models.League.id)
       return query.all()
   except Exception as e:
-      return {"error": str(e)}
-  finally:
-      db.close()
+      raise HTTPException(status_code=500, detail=str(e))
 
+
+from datetime import datetime
+
+...
 
 @router.get("/sync-api-leagues")
-def sync_api_leagues(db: Session = Depends(database.get_db)):
+def sync_api_leagues(db: Session = Depends(database.get_db), season: Optional[int] = None):
   
-  url = f"https://{os.getenv('API_URL')}/leagues?season=2025"  
+  api_url = os.getenv("API_URL")
+  if not api_url:
+    raise HTTPException(status_code=500, detail="API_URL environment variable not set")
+
+  if season is None:
+    season = datetime.now().year
+
+  url = f"https://{api_url}/leagues?season={season}"  
 
   try:
     response = requests.get(url, headers=HEADERS)
