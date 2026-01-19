@@ -5,11 +5,12 @@ from datetime import datetime
 import json
 import os
 import requests
-from fastapi import APIRouter, HTTPException
-from routes.leagues import FAVORITE_LEAGUES
-from routes.matches import HEADERS
+from fastapi import APIRouter, HTTPException, Query, Depends
+from sqlalchemy.orm import Session
+from utils.constants import HEADERS
 from utils.redis_client import get_redis_connection
-from fastapi import APIRouter, Query
+from utils import database
+import models
 
 router = APIRouter(prefix="/redis", tags=["redis"])
 
@@ -30,7 +31,7 @@ def get_redis_keys():
     except Exception as e:
         return {"error": "Failed to retrieve Redis keys", "details": str(e)}
 
-@router.get("/{key}")
+@router.get("/get_key_by_id")
 def get_redis_key(key: str):
     try:
         r, error = get_redis_connection()
@@ -76,7 +77,7 @@ def delete_redis_key(key: str):
 
 
 @router.post("/refresh-fixtures-cache")
-def refresh_matches_cache(date: str = Query(..., description="Date in format YYYY-MM-DD")):
+def refresh_matches_cache(date: str = Query(..., description="Date in format YYYY-MM-DD"), db: Session = Depends(database.get_db)):
     """
     Refresh the Redis cache for matches on a specific date
     
@@ -107,7 +108,8 @@ def refresh_matches_cache(date: str = Query(..., description="Date in format YYY
         print("Fetched matches from external API:", matches)
 
         # Filter by favorite leagues
-        favorite_ids = {league["id"] for league in FAVORITE_LEAGUES}
+        favorite_leagues = db.query(models.League).filter(models.League.is_favorite == True).all()
+        favorite_ids = {league.id for league in favorite_leagues}
 
         filtered_data = [
             match for match in matches
