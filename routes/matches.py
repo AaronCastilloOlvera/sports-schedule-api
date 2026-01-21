@@ -17,6 +17,23 @@ load_dotenv()
 
 router = APIRouter(prefix="/matches", tags=["matches"])
 
+@router.get("/headtohead")
+def get_headtohead_matches(
+  team1: int = Query(..., description="ID of the first team"),
+  team2: int = Query(..., description="ID of the second team")):
+  """
+  Get head-to-head matches between two teams
+  """
+  try:
+      url = f"https://{os.getenv('API_URL')}/fixtures/headtohead"
+      params = { "h2h": f"{team1}-{team2}" }
+      response = requests.get(url, headers=HEADERS, params=params)
+      response_data = response.json()
+      return response_data.get("response", [])
+  except requests.RequestException as e:
+      return {"error": "Failed to fetch from external API", "details": str(e)}
+  except Exception as e:
+      return {"error": "Failed to process head-to-head matches", "details": str(e)}
 
 @router.get("/by-date")
 def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-MM-DD"), db: Session = Depends(database.get_db)):
@@ -70,3 +87,4 @@ def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-
         return {"error": "Failed to fetch from external API", "details": str(e)}
     except Exception as e:
         return {"error": "Failed to process matches", "details": str(e)}
+
