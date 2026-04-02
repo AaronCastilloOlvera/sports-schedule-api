@@ -56,7 +56,7 @@ def get_redis_key(key: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/{key}")
+@router.delete("/delete-key-by-id/{key}")
 def delete_redis_key(key: str):
     try:
         r, error = get_redis_connection()
@@ -74,7 +74,6 @@ def delete_redis_key(key: str):
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @router.post("/refresh-fixtures-cache")
 def refresh_matches_cache(date: str = Query(..., description="Date in format YYYY-MM-DD"), db: Session = Depends(database.get_db)):
@@ -124,3 +123,17 @@ def refresh_matches_cache(date: str = Query(..., description="Date in format YYY
         return {"error": "Failed to fetch from external API", "details": str(e)}
     except Exception as e:
         return {"error": "Failed to refresh cache", "details": str(e)}
+
+@router.delete("/flushdb")
+def flush_redis_db():
+    try:
+        r, error = get_redis_connection()
+        if r is None:
+            raise HTTPException(status_code=500, detail=f"Redis connection failed: {error}")
+        
+        r.flushdb()
+        return {"message": "Redis database flushed successfully"}
+    except HTTPException as he:
+        raise he
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
