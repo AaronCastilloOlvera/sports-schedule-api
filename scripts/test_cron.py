@@ -1,4 +1,3 @@
-
 import os
 import json
 import requests
@@ -19,12 +18,12 @@ def prewarm_cache(days: int):
   r, redis_error = get_redis_connection()
 
   if r is None:
-      print(f"Redis connection failed: {redis_error}")
-      return
+    print(f"Redis connection failed: {redis_error}")
+    return
   
   try:
     favorite_leagues = db.query(models.League).filter(models.League.is_favorite == True).all()
-    favorite_ids = [league.league_id for league in favorite_leagues]    
+    favorite_ids = [league.id for league in favorite_leagues]    
 
     today = datetime.now()
 
@@ -57,4 +56,3 @@ def prewarm_cache(days: int):
 
 if __name__ == "__main__":
   prewarm_cache(days=5)
-
