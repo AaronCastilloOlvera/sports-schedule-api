@@ -11,11 +11,13 @@ from dotenv import load_dotenv
 from utils.constants import HEADERS
 from utils.redis_client import get_redis_connection
 from utils import database
+from services.sports_api_client import SportsAPIClient
 import models
 
 load_dotenv()
 
 router = APIRouter(prefix="/matches", tags=["matches"])
+api_client = SportsAPIClient()
 
 @router.get("/headtohead")
 def get_headtohead_matches(
@@ -67,7 +69,32 @@ def get_h2h_cached_keys():
         return keys
     except Exception as e:
         return {"error": "Failed to scan keys from Redis", "details": str(e)}
-    
+
+@router.get("/by-date/cached-keys")
+def get_by_date_cached_keys(date: str, db: Session = Depends(database.get_db)):
+  r, _ = get_redis_connection()
+  cache_key = f"fixtures:utc:{date}"
+
+  if r:
+    cached_data = r.get(cache_key)
+    if cached_data:
+      return json.loads(cached_data)
+  
+  # If not cached, fetch from API and filter by favorite leagues
+  all_matches = api_client.get_fixtures_by_date(date)
+
+  # Filter by favorite leagues
+  # TODO: Encapsulate this logic in a service layer
+  favorite_leagues = db.query(models.League).filter(models.League.is_favorite == True).all()
+  favorite_ids = {league.id for league in favorite_leagues}
+  filtered_matches = [m for m in all_matches if m.get("league", {}).get("id") in favorite_ids]
+
+  if r:
+    r.setex(cache_key, 432000, json.dumps(filtered_matches))  # Cache for 5 days (432000 seconds)
+  
+  return filtered_matches
+
+
 @router.get("/by-date")
 def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-MM-DD"), db: Session = Depends(database.get_db)):
     """
