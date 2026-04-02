@@ -115,8 +115,8 @@ def refresh_matches_cache(date: str = Query(..., description="Date in format YYY
             match for match in matches
             if match.get("league", {}).get("id") in favorite_ids
         ]
-        
-        r.setex(date, json.dumps(filtered_data), ex=432000)  # Cache for 5 days (432000 seconds)
+
+        r.setex(date, 432000, json.dumps(filtered_data))  # Cache for 5 days (432000 seconds)
 
         return {"data": filtered_data, "cached": False, "message": "Cache refreshed successfully"}
 

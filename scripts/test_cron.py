@@ -42,7 +42,7 @@ def prewarm_cache(days: int):
           if match.get("league", {}).get("id") in favorite_ids
       ]
       
-      r.setex(target_date, json.dumps(filtered_data), ex=432000)
+      r.setex(target_date, 432000, json.dumps(filtered_data))
       print(f"Cache prewarmed for date: {target_date} with {len(filtered_data)} matches")
   
     print("Cache prewarming completed")
