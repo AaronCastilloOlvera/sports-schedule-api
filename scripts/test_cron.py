@@ -23,7 +23,7 @@ def prewarm_cache(days: int):
       return
   
   try:
-    favorite_leagues = db.query(models.leagues).filter(models.leagues.is_favorite == True).all()
+    favorite_leagues = db.query(models.League).filter(models.League.is_favorite == True).all()
     favorite_ids = [league.league_id for league in favorite_leagues]    
 
     today = datetime.now()
