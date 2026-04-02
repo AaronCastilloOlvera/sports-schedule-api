@@ -112,7 +112,7 @@ def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-
 
         # Cache the result if Redis is available
         if r is not None:
-            r.set(date, json.dumps(filtered_data))
+            r.setex(date, json.dumps(filtered_data), ex=432000)  # Cache for 5 days (432000 seconds)
 
         return {"data": filtered_data, "cached": False}
 
