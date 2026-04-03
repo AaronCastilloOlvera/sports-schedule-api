@@ -1,19 +1,13 @@
-"""
-Routes for Redis cache management endpoints
-"""
-from datetime import datetime
 import json
-import os
-import requests
 from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy.orm import Session
-from utils.constants import HEADERS
 from utils.redis_client import get_redis_connection
 from utils import database
-import models
+from services.sports_api_client import SportsAPIClient
+from services.match_service import MatchService
 
 router = APIRouter(prefix="/redis", tags=["redis"])
-
+api_client = SportsAPIClient()
 
 @router.get("/keys")
 def get_redis_keys():
@@ -56,6 +50,22 @@ def get_redis_key(key: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/refresh-fixtures-cache")
+def refresh_matches_cache(date: str = Query(..., description="Date in format YYYY-MM-DD"), db: Session = Depends(database.get_db)):
+    """
+    Refresh the Redis cache for matches on a specific date
+    
+    Parameters:
+    - date: Date in format YYYY-MM-DD (e.g., 2024-12-25)
+    """
+    try:
+      match_service = MatchService(db)
+      matches = match_service.get_matches_by_date(date, force_refresh=True)
+      return {"data": matches, "cached": False, "message": "Cache refreshed successfully"}
+    
+    except Exception as e:
+        return {"error": "Failed to refresh cache", "details": str(e)}
+
 @router.delete("/delete-key-by-id/{key}")
 def delete_redis_key(key: str):
     try:
@@ -74,55 +84,6 @@ def delete_redis_key(key: str):
         raise he
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/refresh-fixtures-cache")
-def refresh_matches_cache(date: str = Query(..., description="Date in format YYYY-MM-DD"), db: Session = Depends(database.get_db)):
-    """
-    Refresh the Redis cache for matches on a specific date
-    
-    Parameters:
-    - date: Date in format YYYY-MM-DD (e.g., 2024-12-25)
-    """
-    try:
-        # Validate date format
-        try:
-            datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
-            return {
-                "error": "Invalid date format",
-                "details": "Date must be in YYYY-MM-DD format (e.g., 2024-12-25)"
-            }
-        
-        r, redis_error = get_redis_connection()
-        if r is None:
-            return {"error": "Redis connection failed", "details": redis_error}
-
-        # Fetch from external API
-        url = f"https://{os.getenv('API_URL')}/fixtures?"
-        params = {"date": date}
-        response = requests.get(url, headers=HEADERS, params=params)
-        response_data = response.json()
-        matches = response_data.get("response", [])
-
-        print("Fetched matches from external API:", matches)
-
-        # Filter by favorite leagues
-        favorite_leagues = db.query(models.League).filter(models.League.is_favorite == True).all()
-        favorite_ids = {league.id for league in favorite_leagues}
-
-        filtered_data = [
-            match for match in matches
-            if match.get("league", {}).get("id") in favorite_ids
-        ]
-
-        r.setex(date, 432000, json.dumps(filtered_data))  # Cache for 5 days (432000 seconds)
-
-        return {"data": filtered_data, "cached": False, "message": "Cache refreshed successfully"}
-
-    except requests.RequestException as e:
-        return {"error": "Failed to fetch from external API", "details": str(e)}
-    except Exception as e:
-        return {"error": "Failed to refresh cache", "details": str(e)}
 
 @router.delete("/flushdb")
 def flush_redis_db():
