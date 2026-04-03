@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from utils.database import SessionLocal
 from services.match_service import MatchService
@@ -13,7 +13,7 @@ def prewarm_cache(days: int):
   
   try:
     match_service = MatchService(db)
-    today = datetime.now(datetime.timezone.utc).date()
+    today = datetime.now(timezone.utc)
 
     for i in range(days):
       target_date = (today + timedelta(days=i)).strftime("%Y-%m-%d")
