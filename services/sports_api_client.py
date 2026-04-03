@@ -16,6 +16,7 @@ class SportsAPIClient:
     params = {"date": date}
     
     try:
+      print(f"Fetching fixtures for date {date} from API...")
       response = requests.get(url, headers=self.headers, params=params)
       response.raise_for_status()
       return response.json().get("response", [])
