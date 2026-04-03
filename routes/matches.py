@@ -18,7 +18,7 @@ api_client = SportsAPIClient()
 @router.get("/by-date")
 def get_matches_by_date(date: str = Query(..., description="Date in format YYYY-MM-DD"), db: Session = Depends(database.get_db)):
   match_service = MatchService(db)
-  return match_service.get_matches_by_date(date, force_refresh=True)
+  return match_service.get_matches_by_date(date, force_refresh=False)
 
 @router.get("/headtohead")
 def get_headtohead_matches(
