@@ -18,9 +18,9 @@ class MatchService:
       cache_key = f"matches_date_{target_date}"
 
       if not force_refresh and self.r.exists(cache_key):
-          cached_data = self.r.get(cache_key)
-          if cached_data:
-            return json.loads(cached_data)
+        cached_data = self.r.get(cache_key)
+        if cached_data:
+          return { "data": json.loads(cached_data) }
 
       all_matches = self.api_client.get_fixtures_by_date(target_date)
 
@@ -34,6 +34,6 @@ class MatchService:
       ]
 
       if self.r:
-          self.r.setex(cache_key, 432000, json.dumps(filtered_matches))  # Cache for 5 days
+        self.r.setex(cache_key, 432000, json.dumps(filtered_matches))  # Cache for 5 days
 
-      return filtered_matches
+      return { "data": filtered_matches }
