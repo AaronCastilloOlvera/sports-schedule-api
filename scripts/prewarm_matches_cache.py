@@ -39,4 +39,4 @@ def prewarm_cache(days: int):
     db.close()
 
 if __name__ == "__main__":
-  prewarm_cache(days=5)
+  prewarm_cache(days=2)
