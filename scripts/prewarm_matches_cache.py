@@ -32,9 +32,9 @@ def prewarm_cache(days: int):
     print(message)
     
   except Exception as e:
-    error_message = f"🚨Error during cache prewarming: {str(e)}"
-    notification_service.send_message(error_message)
-    print(error_message)
+    print(f"🚨Error during cache prewarming: {str(e)}")
+    if e.response:
+      print(f"Response content: {e.response.content}")
   finally:
     db.close()
 
