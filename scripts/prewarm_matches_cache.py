@@ -33,8 +33,6 @@ def prewarm_cache(days: int):
     
   except Exception as e:
     print(f"🚨Error during cache prewarming: {str(e)}")
-    if e.response:
-      print(f"Response content: {e.response.content}")
   finally:
     db.close()
 

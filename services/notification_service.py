@@ -21,5 +21,7 @@ class NotificationService:
     try:
       response = requests.post(f"{self.api_url}/sendMessage", json=payload)
       response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-      print(f"Failed to send Telegram message: {e}")
+    except requests.RequestException as e:
+      print(f"Failed to send Telegram message: {str(e)}")
+      if e.response is not None:
+        print(f"Response content: {e.response.text}")
