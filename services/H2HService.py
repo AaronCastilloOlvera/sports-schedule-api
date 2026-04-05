@@ -17,7 +17,7 @@ class H2HService:
     if self.r: 
       cached_data = self.r.get(cache_key) # Fetch from Redis cache
       if cached_data:
-        return json.loads(cached_data)
+        return { "data": json.loads(cached_data) }
       
     # Fetch from external API if not in cache
     h2h_data = self.api_client.get_headtohead_matches(ids[0], ids[1])
