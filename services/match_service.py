@@ -15,7 +15,7 @@ class MatchService:
       Fetches matches for a specific date. 
       If force_refresh is True, it will fetch fresh data from the API and update the cache.
       """
-      cache_key = f"matches_date_{target_date}"
+      cache_key = f"matches:date:{target_date}"
 
       if not force_refresh and self.r.exists(cache_key):
         cached_data = self.r.get(cache_key)
