@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from utils.database import SessionLocal
 from services.match_service import MatchService
 from services.notification_service import NotificationService
+import time
 
 load_dotenv()
 
@@ -26,6 +27,8 @@ def prewarm_cache(days: int):
       total_matches_stored += len(matches.get("data", []))
 
       print(f"Fetched {len(matches)} matches for date: {target_date}")
+
+      time.sleep(5)  # Sleep to avoid overwhelming the database or API
   
     message = f"✅ Cache prewarming completed for {days} day(s). Total matches stored: {total_matches_stored}."
     notification_service.send_message(message)
