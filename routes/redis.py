@@ -60,8 +60,7 @@ def refresh_matches_cache(date: str = Query(..., description="Date in format YYY
     """
     try:
       match_service = MatchService(db)
-      matches = match_service.get_matches_by_date(date, force_refresh=True)
-      return {"data": matches, "cached": False, "message": "Cache refreshed successfully"}
+      return match_service.get_matches_by_date(date, force_refresh=True)      
     
     except Exception as e:
         return {"error": "Failed to refresh cache", "details": str(e)}
