@@ -16,7 +16,8 @@ def prewarm_cache(days: int):
   notification_service = NotificationService()
   
   total_matches_stored = 0
-  
+  count_by_league = {}
+
   try:
     h2h_service = H2HService()
     match_service = MatchService(db)
@@ -34,11 +35,28 @@ def prewarm_cache(days: int):
       # Prewarm H2H cache
       for match in matches.get("data", []):
         h2h_service.get_headtohead_matches(match["teams"]["home"]["id"], match["teams"]["away"]["id"])
+        league_name = match["league"]["name"]
+
+        if league_name in count_by_league:
+          count_by_league[league_name] += 1
+        else:
+          count_by_league[league_name] = 1
+        
+        print(f" -> {len(matches.get('data', []))} matches for league: {league_name}")
         time.sleep(0.5)  # Sleep to avoid overwhelming the API
 
-    message = f"✅ Cache prewarming completed for {days} day(s). Total matches stored: {total_matches_stored}."
-    notification_service.send_message(message)
-    print(message)
+    # Build summary message
+    message_html = (
+      f"✅ <b> Cache Prewarming Summary</b>\n"
+      f"⚽Total Matches Stored: {total_matches_stored}\n\n"
+      f"🏆 <b> Matches by League:</b>\n"
+    )
+    
+    for league, count in count_by_league.items():
+      message_html += f"{league}: {count}\n"
+    
+    notification_service.send_message(message_html)
+    print(message_html)
     
   except Exception as e:
     print(f"🚨Error during cache prewarming: {str(e)}")

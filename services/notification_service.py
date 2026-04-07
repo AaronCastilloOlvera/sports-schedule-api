@@ -15,7 +15,7 @@ class NotificationService:
     payload = {
       "chat_id": self.chat_id,
       "text": message,
-      "parse_mode": "Markdown"
+      "parse_mode": "HTML"
     }
 
     try:
