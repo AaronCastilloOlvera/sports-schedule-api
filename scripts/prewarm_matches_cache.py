@@ -5,8 +5,10 @@ from services.match_service import MatchService
 from services.H2HService import H2HService
 from services.notification_service import NotificationService
 import time
+import os
 
 load_dotenv()
+days_to_prewarm = int(os.getenv("DAYS_TO_PREWARM", 5))
 
 # This script is used to prewarm the Redis cache.
 
@@ -64,4 +66,4 @@ def prewarm_cache(days: int):
     db.close()
 
 if __name__ == "__main__":
-  prewarm_cache(days=3)
+  prewarm_cache(days=days_to_prewarm)
