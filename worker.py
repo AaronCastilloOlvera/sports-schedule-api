@@ -1,4 +1,3 @@
-import os
 from datetime import datetime, timedelta, timezone
 import pytz
 from dateutil import parser
@@ -54,6 +53,11 @@ class LiveWorker:
                         
             self.active_windows = merged_windows
             print(f"[SCOUT] ✅ Planning complete. {len(merged_windows)} active windows for today.")
+
+            for idx, (start_time, end_time) in enumerate(merged_windows, start=1):
+                start_local = start_time.astimezone(self.local_tz).strftime("%H:%M")
+                end_local = end_time.astimezone(self.local_tz).strftime("%H:%M")
+                print(f" 🕒 ActiveWindow {idx}: {start_local} - {end_local} (Local Time)")
             
         except Exception as e:
             print(f"[SCOUT ERROR] ❌ {str(e)}")
