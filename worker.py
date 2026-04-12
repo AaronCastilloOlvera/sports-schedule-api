@@ -1,9 +1,14 @@
 from datetime import datetime, timedelta, timezone
-import pytz
+from dotenv import load_dotenv
 from dateutil import parser
 from apscheduler.schedulers.blocking import BlockingScheduler
 from utils.database import SessionLocal
 from services.match_service import MatchService
+import os
+import pytz
+
+load_dotenv()
+minutes_interval = int(os.getenv("WORKER_INTERVAL_MINUTES", 5))
 
 class LiveWorker:
     def __init__(self):
@@ -107,7 +112,7 @@ def start_worker():
     scheduler.add_job(worker.run_scout, 'cron', hour=6, minute=0, timezone=timezone.utc)
     
     # 2. The Worker runs every 5 minutes, ALL DAY
-    scheduler.add_job(worker.run_live_update, 'interval', minutes=5)
+    scheduler.add_job(worker.run_live_update, 'interval', minutes=minutes_interval)
     
     # Manually run the scout on startup (useful for deployments during the day)
     worker.run_scout()
