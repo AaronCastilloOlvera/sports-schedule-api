@@ -70,6 +70,10 @@ class LiveWorker:
     current_time_utc = datetime.now(timezone.utc)
     is_scheduled_time = any(start <= current_time_utc <= end for start, end in self.active_windows)
     
+    if not self.active_windows:
+      print("💤 No hay partidos hoy. El worker dormirá todo el día.\n")
+      return
+
     if is_scheduled_time or self.active_games_pending:
       print(f"[WORKER] ⚽ In-play window active (Current UTC: {current_time_utc.strftime('%H:%M:%S')}). Fetching data...")
       db = SessionLocal()
@@ -92,57 +96,3 @@ class LiveWorker:
           print(f"[WORKER ERROR] ❌ {str(e)}")
       finally:
           db.close()
-    else:
-        print("[WORKER] 🌙 Outside of match hours. Sleeping...")
-        """Dibuja una línea de tiempo en ASCII de 24 horas (resolución de 30 min)."""
-        print("\n" + "="*56)
-        print("📊 LÍNEA DE TIEMPO DEL WORKER (Hora Local) 📊")
-        print("="*56)
-        
-        if not self.active_windows:
-            print("💤 No hay partidos hoy. El worker dormirá todo el día.\n")
-            return
-
-        # Creamos 48 bloques de 30 minutos para representar las 24 horas del día
-        timeline = ["."] * 48
-        hoy_fecha = datetime.now(self.local_tz).date()
-
-        for start, end in self.active_windows:
-            start_local = start.astimezone(self.local_tz)
-            end_local = end.astimezone(self.local_tz)
-
-            # Calculamos el índice de inicio (0 a 47)
-            if start_local.date() < hoy_fecha:
-                start_idx = 0  # Si empezó ayer, graficamos desde la medianoche de hoy
-            elif start_local.date() > hoy_fecha:
-                continue       # Si empieza mañana, lo ignoramos hoy
-            else:
-                start_idx = (start_local.hour * 60 + start_local.minute) // 30
-
-            # Calculamos el índice de fin (0 a 47)
-            if end_local.date() > hoy_fecha:
-                end_idx = 47   # Si termina mañana, graficamos hasta las 23:59 de hoy
-            elif end_local.date() < hoy_fecha:
-                continue       # Si terminó ayer, lo ignoramos
-            else:
-                end_idx = (end_local.hour * 60 + end_local.minute) // 30
-
-            # "Pintamos" los bloques activos
-            for i in range(start_idx, min(end_idx + 1, 48)):
-                timeline[i] = "█"
-
-        # Construimos el string visual de las horas (00 a 23)
-        escala_horas = "".join([f"{h:02d} " for h in range(24)])
-        
-        # Construimos el string de los bloques (juntamos 2 de 30 min por cada hora)
-        grafica = ""
-        for i in range(0, 48, 2):
-            b1 = timeline[i]
-            b2 = timeline[i+1]
-            grafica += f"{b1}{b2} "
-
-        print("Horas:  " + escala_horas)
-        print("Activo: " + grafica)
-        print("-" * 56)
-        print("Leyenda: █ = Worker Activo (Fetch a la API) | . = Durmiendo")
-        print("="*56 + "\n")
