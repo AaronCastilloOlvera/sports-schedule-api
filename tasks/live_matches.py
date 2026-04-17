@@ -60,10 +60,25 @@ class LiveWorker:
       self.active_windows = merged_windows
       print(f"[SCOUT] ✅ Planning complete. {len(merged_windows)} active windows for today.")
 
-      for idx, (start_time, end_time) in enumerate(merged_windows, start=1):
-          start_local = start_time.astimezone(self.local_tz).strftime("%H:%M")
-          end_local = end_time.astimezone(self.local_tz).strftime("%H:%M")
-          print(f" 🕒 ActiveWindow {idx}: {start_local} - {end_local} (Local Time)")
+      total_active_minutes = 0
+      for start_time, end_time in self.active_windows:
+        duration = (end_time - start_time).total_seconds() / 60
+        total_active_minutes += duration
+         
+        start_local = start_time.astimezone(self.local_tz).strftime("%H:%M")
+        end_local = end_time.astimezone(self.local_tz).strftime("%H:%M")
+        print(f" 🕒 ActiveWindow: {start_local} - {end_local} (Local Time)")
+
+      estimated_requests = int(total_active_minutes / minutes_interval)
+
+      print("\n" + "-"*40)
+      print("📈 DAILY API CONSUMPTION ESTIMATE 📈")
+      print("-"*40)
+      print(f"⏱️ Refresh Interval : Every {minutes_interval} minutes")
+      print(f"⏳ Total Active Time: {int(total_active_minutes // 60)}h {int(total_active_minutes % 60)}m")
+      print(f"📡 Estimated Requests: ~{estimated_requests} API calls")
+      print("-"*40 + "\n")
+      
 
     except Exception as e:
         print(f"[SCOUT ERROR] ❌ {str(e)}")
