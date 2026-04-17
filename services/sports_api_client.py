@@ -13,7 +13,7 @@ class SportsAPIClient:
     """
 
     url = f"{self.base_url}/fixtures"
-    params = {"date": date}
+    params = {"date": date, "timezone": "America/Mexico_City"}
     
     try:
       print(f"Fetching fixtures for date {date} from API...")
