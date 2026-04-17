@@ -37,6 +37,11 @@ class LiveWorker:
       windows = []
       for match in matches:
           start_time = parser.parse(match["fixture"]["date"])
+          
+          start_local = start_time.astimezone(self.local_tz)
+          if start_local.strftime("%Y-%m-%d") != today_str:
+              continue
+             
           windows.append([start_time, start_time + timedelta(hours=3)])
           
       # Algorithm: Merge overlapping windows
