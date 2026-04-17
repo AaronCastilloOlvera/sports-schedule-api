@@ -67,17 +67,17 @@ class LiveWorker:
          
         start_local = start_time.astimezone(self.local_tz).strftime("%H:%M")
         end_local = end_time.astimezone(self.local_tz).strftime("%H:%M")
-        print(f" 🕒 ActiveWindow: {start_local} - {end_local} (Local Time)")
+        print(f"[SCOUT] 🕒 ActiveWindow: {start_local} - {end_local} (Local Time)")
 
       estimated_requests = int(total_active_minutes / minutes_interval)
 
-      print("\n" + "-"*40)
-      print("📈 DAILY API CONSUMPTION ESTIMATE 📈")
-      print("-"*40)
-      print(f"⏱️ Refresh Interval : Every {minutes_interval} minutes")
-      print(f"⏳ Total Active Time: {int(total_active_minutes // 60)}h {int(total_active_minutes % 60)}m")
-      print(f"📡 Estimated Requests: ~{estimated_requests} API calls")
-      print("-"*40 + "\n")
+      print(f"[SCOUT]\n" + "-"*40)
+      print(f"[SCOUT] 📈 DAILY API CONSUMPTION ESTIMATE 📈")
+      print(f"[SCOUT]-"*40)
+      print(f"[SCOUT] ⏱️ Refresh Interval : Every {minutes_interval} minutes")
+      print(f"[SCOUT] ⏳ Total Active Time: {int(total_active_minutes // 60)}h {int(total_active_minutes % 60)}m")
+      print(f"[SCOUT] 📡 Estimated Requests: ~{estimated_requests} API calls")
+      print(f"[SCOUT]\n" + "-"*40)
       
 
     except Exception as e:
