@@ -71,13 +71,13 @@ class LiveWorker:
 
       estimated_requests = int(total_active_minutes / minutes_interval)
 
-      print(f"[SCOUT]\n" + "-"*40)
+      print(f"\n[SCOUT] " + "-"*40)
       print(f"[SCOUT] 📈 DAILY API CONSUMPTION ESTIMATE 📈")
-      print(f"[SCOUT]-"*40)
-      print(f"[SCOUT] ⏱️ Refresh Interval : Every {minutes_interval} minutes")
+      print(f"[SCOUT] " + "-"*40)
+      print(f"[SCOUT] ⏱️  Refresh Interval : Every {minutes_interval} minutes")
       print(f"[SCOUT] ⏳ Total Active Time: {int(total_active_minutes // 60)}h {int(total_active_minutes % 60)}m")
       print(f"[SCOUT] 📡 Estimated Requests: ~{estimated_requests} API calls")
-      print(f"[SCOUT]\n" + "-"*40)
+      print(f"[SCOUT] " + "-"*40 + "\n")
       
 
     except Exception as e:
