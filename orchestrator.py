@@ -53,12 +53,12 @@ def start_orchestrator():
     # ==========================================
     # TASK 2: Team Recent Form Pre-warming
     # ==========================================
-    # Purpose: Fetches the last 10 fixtures for every team playing today and
-    # caches the result under team_form:{team_id} with a 24-hour TTL.
+    # Purpose: Fetches the last 5 fixtures for every team playing today and
+    # caches the result under team_recent_matches:{team_id} with a 24-hour TTL.
     # Execution: Runs once daily at 5:00 AM local time — after the H2H prewarm
     # finishes (3 AM) but before the scout (6 AM) so data is ready at kickoff.
     scheduler.add_job(
-        team_form_worker.prewarm_team_form,
+        team_form_worker.prewarm_recent_matches,
         CronTrigger(hour=5, minute=0, timezone='America/Mexico_City'),
         id='team_form_prewarm_worker',
         name='Team Form Pre-warming Worker',

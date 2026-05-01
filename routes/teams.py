@@ -6,18 +6,18 @@ from services.sports_api_client import SportsAPIClient
 
 router = APIRouter(prefix="/api/teams", tags=["teams"])
 
-FORM_TTL  = 86400    # 24 hours  — team_form:{team_id}
+RECENT_MATCHES_TTL = 86400  # 24 hours  — team_recent_matches:{team_id}
 STATS_TTL = 2592000  # 30 days   — fixture_stats:{fixture_id}
 
 
 @router.get("/{team_id}/form")
-def get_team_form(team_id: int):
+def get_team_recent_matches(team_id: int):
     r, redis_error = get_redis_connection()
     if r is None:
         raise HTTPException(status_code=500, detail=f"Redis unavailable: {redis_error}")
 
     # ── Cache hit ──────────────────────────────────────────────────────────────
-    cached = r.get(f"team_form:{team_id}")
+    cached = r.get(f"team_recent_matches:{team_id}")
     if cached:
         return {"team_id": team_id, "source": "cache", "data": json.loads(cached)}
 
@@ -44,6 +44,6 @@ def get_team_form(team_id: int):
 
         enriched.append({**fixture, "statistics": stats})
 
-    r.setex(f"team_form:{team_id}", FORM_TTL, json.dumps(enriched))
+    r.setex(f"team_recent_matches:{team_id}", RECENT_MATCHES_TTL, json.dumps(enriched))
 
     return {"team_id": team_id, "source": "assembled", "data": enriched}

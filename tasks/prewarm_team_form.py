@@ -10,7 +10,7 @@ import pytz
 
 load_dotenv()
 
-FORM_TTL  = 86400    # 24 hours  — team_form:{team_id}
+RECENT_MATCHES_TTL = 86400  # 24 hours  — team_recent_matches:{team_id}
 STATS_TTL = 2592000  # 30 days   — fixture_stats:{fixture_id}
 
 
@@ -23,7 +23,7 @@ class PrewarmTeamFormWorker:
         self.match_service = MatchService(self.db)
         self.api_client = SportsAPIClient()
 
-    def prewarm_team_form(self):
+    def prewarm_recent_matches(self):
         today = datetime.now(self.local_tz).strftime("%Y-%m-%d")
         local_time = datetime.now(self.local_tz).strftime("%H:%M:%S")
 
@@ -86,8 +86,8 @@ class PrewarmTeamFormWorker:
                     enriched.append({**fixture, "statistics": stats})
 
                 # ── Save merged payload ────────────────────────────────────────
-                team_key = f"team_form:{team_id}"
-                self.r.setex(team_key, FORM_TTL, json.dumps(enriched))
+                team_key = f"team_recent_matches:{team_id}"
+                self.r.setex(team_key, RECENT_MATCHES_TTL, json.dumps(enriched))
                 print(f" -> Stored enriched form for team {team_id} ({len(enriched)} fixture(s)) [{team_key}]")
                 teams_stored += 1
 
