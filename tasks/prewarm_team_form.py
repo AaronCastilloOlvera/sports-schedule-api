@@ -60,7 +60,7 @@ class PrewarmTeamFormWorker:
                 if not fixtures:
                     print(f" -> No recent fixtures returned for team {team_id}. Skipping.")
                     teams_failed += 1
-                    time.sleep(1.5)  # still rate-limit before the next team call
+                    time.sleep(0.6)  # still rate-limit before the next team call
                     continue
 
                 # ── Inner loop: deep stats per fixture ─────────────────────────
@@ -76,7 +76,7 @@ class PrewarmTeamFormWorker:
                         stats_cached += 1
                         print(f"    [cache hit]  fixture_stats:{fixture_id}")
                     else:
-                        time.sleep(1.5)  # rate-limit before each uncached stats call
+                        time.sleep(0.6)  # rate-limit before each uncached stats call
                         stats = self.api_client.get_fixture_statistics(fixture_id)
                         if stats:
                             self.r.setex(stats_key, STATS_TTL, json.dumps(stats))
@@ -91,7 +91,7 @@ class PrewarmTeamFormWorker:
                 print(f" -> Stored enriched form for team {team_id} ({len(enriched)} fixture(s)) [{team_key}]")
                 teams_stored += 1
 
-                time.sleep(1.5)  # rate-limit before the next get_team_recent_form call
+                time.sleep(0.6)  # rate-limit before the next get_team_recent_form call
 
             print(
                 f"TEAM FORM ✅ Done. "

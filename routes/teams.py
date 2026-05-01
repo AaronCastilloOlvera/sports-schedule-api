@@ -4,13 +4,12 @@ from fastapi import APIRouter, HTTPException
 from utils.redis_client import get_redis_connection
 from services.sports_api_client import SportsAPIClient
 
-router = APIRouter(prefix="/api/teams", tags=["teams"])
+router = APIRouter(prefix="/teams", tags=["teams"])
 
 RECENT_MATCHES_TTL = 86400  # 24 hours  — team_recent_matches:{team_id}
 STATS_TTL = 2592000  # 30 days   — fixture_stats:{fixture_id}
 
-
-@router.get("/{team_id}/form")
+@router.get("/{team_id}/recent-matches")
 def get_team_recent_matches(team_id: int):
     r, redis_error = get_redis_connection()
     if r is None:
@@ -37,7 +36,7 @@ def get_team_recent_matches(team_id: int):
         if raw:
             stats = json.loads(raw)
         else:
-            time.sleep(1.5)  # respect API-Sports per-second rate limit
+            time.sleep(0.6)  # respect API-Sports per-second rate limit
             stats = api.get_fixture_statistics(fixture_id)
             if stats:
                 r.setex(stats_key, STATS_TTL, json.dumps(stats))
