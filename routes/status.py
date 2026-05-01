@@ -2,7 +2,7 @@ import os
 import requests
 from fastapi import APIRouter, HTTPException
 
-router = APIRouter(prefix="/api/status", tags=["status"])
+router = APIRouter(prefix="/status", tags=["status"])
 
 
 @router.get("/usage")

@@ -4,7 +4,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timedelta
 from tasks.prewarn_h2h import PrewarmCacheWorker
-from tasks.live_matches import LiveWorker 
+from tasks.live_matches import LiveWorker
+from tasks.prewarm_team_form import PrewarmTeamFormWorker
 from dotenv import load_dotenv
 import os
 
@@ -32,6 +33,7 @@ def start_orchestrator():
     # Initialize the worker instances
     live_worker = LiveWorker()
     prewarm_worker = PrewarmCacheWorker()
+    team_form_worker = PrewarmTeamFormWorker()
 
     # ==========================================
     # TASK 1: H2H Cache Pre-warming
@@ -49,7 +51,22 @@ def start_orchestrator():
     )
 
     # ==========================================
-    # TASK 2: Daily Schedule Scout
+    # TASK 2: Team Recent Form Pre-warming
+    # ==========================================
+    # Purpose: Fetches the last 10 fixtures for every team playing today and
+    # caches the result under team_form:{team_id} with a 24-hour TTL.
+    # Execution: Runs once daily at 5:00 AM local time — after the H2H prewarm
+    # finishes (3 AM) but before the scout (6 AM) so data is ready at kickoff.
+    scheduler.add_job(
+        team_form_worker.prewarm_team_form,
+        CronTrigger(hour=5, minute=0, timezone='America/Mexico_City'),
+        id='team_form_prewarm_worker',
+        name='Team Form Pre-warming Worker',
+        replace_existing=True
+    )
+
+    # ==========================================
+    # TASK 3: Daily Schedule Scout
     # ==========================================
     # Purpose: Queries the sports API to find out exactly which matches are playing today
     # and calculates the active time windows for live polling.
@@ -63,7 +80,7 @@ def start_orchestrator():
     )
 
     # ==========================================
-    # TASK 3: Live Match Updater
+    # TASK 4: Live Match Updater
     # ==========================================
     # Purpose: Polls the sports API for live scores, elapsed time, and match status.
     # Execution: Runs on a continuous interval (e.g., every 5 minutes) defined in the .env file.

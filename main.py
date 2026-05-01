@@ -10,7 +10,7 @@ from models import base as models
 import os
 
 # Import routers
-from routes import leagues, matches, redis, bets, dev_tools, status
+from routes import leagues, matches, redis, bets, dev_tools, status, teams
 from utils.redis_client import get_redis_connection
 
 # Load environment variables
@@ -41,6 +41,7 @@ models.Base.metadata.create_all(bind=database.engine)
 # Register routers
 app.include_router(leagues.router)
 app.include_router(matches.router)
+app.include_router(teams.router)
 app.include_router(redis.router)
 app.include_router(bets.router)
 app.include_router(dev_tools.router)
