@@ -1,4 +1,4 @@
-# sports-schedule-api
+﻿# sports-schedule-api
 
 ## Python Commands
 
@@ -34,7 +34,13 @@ venv\Scripts\activate.bat
 uvicorn main:app --reload
 ```
 
+---
 
+## AI Assistance
+
+At the start of every new Claude Code session, paste the full contents of `context.md` as your first message. After that, just chat normally — no special format needed.
+
+---
 
 # How to create an Migration
 
