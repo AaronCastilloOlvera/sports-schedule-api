@@ -20,7 +20,7 @@ class SportsAPIClient:
       print(f"Error fetching fixtures for date {date}: {e}")
       return []
 
-  def get_team_recent_form(self, team_id: int, last: int = 10):
+  def get_team_last_matches(self, team_id: int, last: int = 10):
     url = f"{self.base_url}/fixtures"
     params = {"team": team_id, "last": last}
     try:
@@ -28,7 +28,7 @@ class SportsAPIClient:
       response.raise_for_status()
       return response.json().get("response", [])
     except requests.RequestException as e:
-      print(f"Error fetching recent form for team {team_id}: {e}")
+      print(f"Error fetching last matches for team {team_id}: {e}")
       return []
 
   def get_fixture_statistics(self, fixture_id: int):

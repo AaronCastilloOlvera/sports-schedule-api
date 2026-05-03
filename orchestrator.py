@@ -3,9 +3,9 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from datetime import datetime, timedelta
-from tasks.prewarn_h2h import PrewarmCacheWorker
+from tasks.prewarm_h2h import PrewarmCacheWorker
 from tasks.live_matches import LiveWorker
-from tasks.prewarm_team_form import PrewarmTeamFormWorker
+from tasks.prewarm_recent_matches import PrewarmRecentMatchesWorker
 from dotenv import load_dotenv
 import os
 
@@ -20,71 +20,83 @@ minutes_interval = int(os.getenv("WORKER_INTERVAL_MINUTES", 5))
 def start_orchestrator():
     """
     Initializes and starts the central job scheduler (Orchestrator).
-    
+
     This orchestrator is responsible for managing background tasks using APScheduler.
-    It guarantees that jobs like pre-warming caches, scouting daily schedules, 
+    It guarantees that jobs like pre-warming caches, scouting daily schedules,
     and fetching live match updates run at precise times without overlapping.
     """
     logger.info("🚀 Starting Orchestrator...")
 
     # max_instances=1 prevents a job from executing again if the previous run hasn't finished.
     scheduler = BlockingScheduler(job_defaults={'max_instances': 1})
-    
+
     # Initialize the worker instances
     live_worker = LiveWorker()
     prewarm_worker = PrewarmCacheWorker()
-    team_form_worker = PrewarmTeamFormWorker()
+    recent_matches_worker = PrewarmRecentMatchesWorker()
 
     # ==========================================
-    # TASK 1: H2H Cache Pre-warming
+    # TASK 1: Match Schedule Cache (00:30)
     # ==========================================
-    # Purpose: Fetches and caches Head-to-Head (H2H) statistics for upcoming matches.
-    # Execution: Runs once daily at 3:00 AM local time.
-    # Why: This runs during extreme off-peak hours to prevent hitting API rate limits
-    # and ensures Redis is fully populated before users wake up to check the app.
+    # Purpose: Fetches today's matches from the API and populates Redis so the
+    # two subsequent prewarm jobs have data to iterate over without hitting the API.
+    # Execution: Runs once daily at 00:30 — right after matches finish around midnight.
     scheduler.add_job(
-        prewarm_worker.prewarm_matches,
-        CronTrigger(hour=3, minute=0, timezone='America/Mexico_City'),
-        id='h2h_prewarm_worker',
-        name='H2H Cache Prewarming Worker',
+        prewarm_worker.prewarm_match_schedules,
+        CronTrigger(hour=0, minute=30, timezone='America/Mexico_City'),
+        id='match_schedule_prewarm',
+        name='Match Schedule Pre-warming',
         replace_existing=True
     )
 
     # ==========================================
-    # TASK 2: Team Recent Form Pre-warming
+    # TASK 2: H2H Cache Pre-warming (00:45)
+    # ==========================================
+    # Purpose: Reads the freshly cached match schedules and fetches Head-to-Head
+    # history for every upcoming fixture. Runs against Redis, not the API.
+    # Execution: Runs once daily at 00:45, after Task 1 has populated the cache.
+    scheduler.add_job(
+        prewarm_worker.prewarm_h2h_data,
+        CronTrigger(hour=0, minute=45, timezone='America/Mexico_City'),
+        id='h2h_prewarm_worker',
+        name='H2H Cache Pre-warming Worker',
+        replace_existing=True
+    )
+
+    # ==========================================
+    # TASK 3: Recent Matches Pre-warming (01:00)
     # ==========================================
     # Purpose: Fetches the last 5 fixtures for every team playing today and
     # caches the result under team_recent_matches:{team_id} with a 24-hour TTL.
-    # Execution: Runs once daily at 5:00 AM local time — after the H2H prewarm
-    # finishes (3 AM) but before the scout (6 AM) so data is ready at kickoff.
+    # Execution: Runs once daily at 01:00, after H2H prewarm finishes.
     scheduler.add_job(
-        team_form_worker.prewarm_recent_matches,
-        CronTrigger(hour=5, minute=0, timezone='America/Mexico_City'),
-        id='team_form_prewarm_worker',
-        name='Team Form Pre-warming Worker',
+        recent_matches_worker.prewarm_recent_matches,
+        CronTrigger(hour=1, minute=0, timezone='America/Mexico_City'),
+        id='recent_matches_prewarm_worker',
+        name='Recent Matches Pre-warming Worker',
         replace_existing=True
     )
 
     # ==========================================
-    # TASK 3: Daily Schedule Scout
+    # TASK 4: Live Window Calculator (01:15)
     # ==========================================
-    # Purpose: Queries the sports API to find out exactly which matches are playing today
-    # and calculates the active time windows for live polling.
-    # Execution: Runs once daily at 6:00 AM local time.
+    # Purpose: Reads the freshly cached match schedule and builds the merged active
+    # time windows that tell the Live Match Updater when to poll the API.
+    # Execution: Runs once daily at 01:15, right after the nightly prewarm jobs finish.
     scheduler.add_job(
-        live_worker.run_scout,
-        CronTrigger(hour=6, minute=0, timezone='America/Mexico_City'),
-        id='scout_worker',
-        name='Scout Worker',
+        live_worker.calculate_live_windows,
+        CronTrigger(hour=1, minute=15, timezone='America/Mexico_City'),
+        id='window_calculator_worker',
+        name='Window Calculator Worker',
         replace_existing=True
     )
 
     # ==========================================
-    # TASK 4: Live Match Updater
+    # TASK 5: Live Match Updater (interval)
     # ==========================================
     # Purpose: Polls the sports API for live scores, elapsed time, and match status.
     # Execution: Runs on a continuous interval (e.g., every 5 minutes) defined in the .env file.
-    # Note: The underlying worker logic determines if it should actually fetch data 
+    # Note: The underlying worker logic determines if it should actually fetch data
     # based on the active windows generated by the Scout.
     scheduler.add_job(
         live_worker.run_live_update,
@@ -95,11 +107,11 @@ def start_orchestrator():
     )
 
     logging.info("✅ Orchestrator configuration complete.")
-    
-    # Run the scout immediately on startup to ensure we have today's schedule 
+
+    # Run the scout immediately on startup to ensure we have today's schedule
     # in case the server is restarted during the day.
-    logger.info("Executing initial daily scout...")
-    live_worker.run_scout()
+    logger.info("Executing initial window calculation...")
+    live_worker.calculate_live_windows()
 
     try:
         # Start the blocking scheduler (this keeps the script running indefinitely)

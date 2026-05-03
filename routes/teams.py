@@ -23,7 +23,7 @@ def get_team_recent_matches(team_id: int):
     # ── Cache miss: assemble from API ──────────────────────────────────────────
     api = SportsAPIClient()
 
-    fixtures = api.get_team_recent_form(team_id, last=5)
+    fixtures = api.get_team_last_matches(team_id, last=5)
     if not fixtures:
         raise HTTPException(status_code=404, detail=f"No recent fixtures found for team {team_id}.")
 

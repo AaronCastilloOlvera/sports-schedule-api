@@ -7,7 +7,6 @@ import os
 import pytz
 
 load_dotenv()
-minutes_interval = int(os.getenv("WORKER_INTERVAL_MINUTES", 5))
 
 class LiveWorker:
   def __init__(self):
@@ -17,9 +16,9 @@ class LiveWorker:
     self.active_games_pending = False
     self.IN_PLAY_STATUSES = {'1H', 'HT', '2H', 'ET', 'BT', 'P', 'LIVE', 'INT'}
 
-  def run_scout(self):
+  def calculate_live_windows(self):
     """Calculates today's match schedules and creates active time windows"""
-    print("[SCOUT] 🕵️‍♂️ Searching for today's matches...")
+    print("[WINDOWS] 🕵️‍♂️ Searching for today's matches...")
     db = SessionLocal()
     try:
       match_service = MatchService(db)
@@ -29,7 +28,7 @@ class LiveWorker:
       matches = response.get("data", [])
       
       if not matches:
-          print("[SCOUT] 💤 No matches scheduled for today.")
+          print("[WINDOWS] 💤 No matches scheduled for today.")
           self.active_windows = []
           return
 
@@ -58,7 +57,7 @@ class LiveWorker:
                   merged_windows.append(w)
                   
       self.active_windows = merged_windows
-      print(f"[SCOUT] ✅ Planning complete. {len(merged_windows)} active windows for today.")
+      print(f"[WINDOWS] ✅ Planning complete. {len(merged_windows)} active windows for today.")
 
       total_active_minutes = 0
       for start_time, end_time in self.active_windows:
@@ -67,21 +66,22 @@ class LiveWorker:
          
         start_local = start_time.astimezone(self.local_tz).strftime("%H:%M")
         end_local = end_time.astimezone(self.local_tz).strftime("%H:%M")
-        print(f"[SCOUT] 🕒 ActiveWindow: {start_local} - {end_local} (Local Time)")
+        print(f"[WINDOWS] 🕒 ActiveWindow: {start_local} - {end_local} (Local Time)")
 
+      minutes_interval = int(os.getenv("WORKER_INTERVAL_MINUTES", 5))
       estimated_requests = int(total_active_minutes / minutes_interval)
 
-      print(f"\n[SCOUT] " + "-"*40)
-      print(f"[SCOUT] 📈 DAILY API CONSUMPTION ESTIMATE 📈")
-      print(f"[SCOUT] " + "-"*40)
-      print(f"[SCOUT] ⏱️  Refresh Interval : Every {minutes_interval} minutes")
-      print(f"[SCOUT] ⏳ Total Active Time: {int(total_active_minutes // 60)}h {int(total_active_minutes % 60)}m")
-      print(f"[SCOUT] 📡 Estimated Requests: ~{estimated_requests} API calls")
-      print(f"[SCOUT] " + "-"*40 + "\n")
+      print(f"\n[WINDOWS] " + "-"*40)
+      print(f"[WINDOWS] 📈 DAILY API CONSUMPTION ESTIMATE 📈")
+      print(f"[WINDOWS] " + "-"*40)
+      print(f"[WINDOWS] ⏱️ Refresh Interval : Every {minutes_interval} minutes")
+      print(f"[WINDOWS] ⏳ Total Active Time: {int(total_active_minutes // 60)}h {int(total_active_minutes % 60)}m")
+      print(f"[WINDOWS] 📡 Estimated Requests: ~{estimated_requests} API calls")
+      print(f"[WINDOWS] " + "-"*40 + "\n")
       
 
     except Exception as e:
-        print(f"[SCOUT ERROR] ❌ {str(e)}")
+        print(f"[WINDOWS ERROR] ❌ {str(e)}")
     finally:
         db.close()
 
@@ -91,7 +91,7 @@ class LiveWorker:
     is_scheduled_time = any(start <= current_time_utc <= end for start, end in self.active_windows)
     
     if not self.active_windows:
-      print("💤 No hay partidos hoy. El worker dormirá todo el día.\n")
+      print("[WORKER] 💤 No matches today. Worker will sleep all day.")
       return
 
     if is_scheduled_time or self.active_games_pending:
