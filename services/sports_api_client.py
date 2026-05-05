@@ -42,6 +42,18 @@ class SportsAPIClient:
       print(f"Error fetching statistics for fixture {fixture_id}: {e}")
       return []
 
+  def get_live_fixtures(self):
+    """Fetch all currently live fixtures. Response includes events and statistics."""
+    url = f"{self.base_url}/fixtures"
+    params = {"live": "all"}
+    try:
+      response = requests.get(url, headers=self.headers, params=params)
+      response.raise_for_status()
+      return response.json().get("response", [])
+    except requests.RequestException as e:
+      print(f"Error fetching live fixtures: {e}")
+      return []
+
   def get_headtohead_matches(self, team1: int, team2: int):
     url = f"{self.base_url}/fixtures/headtohead"
     params = {"h2h": f"{team1}-{team2}"}
