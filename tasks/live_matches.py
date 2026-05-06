@@ -20,6 +20,7 @@ class LiveWorker:
     self.local_tz = pytz.timezone('America/Mexico_City')
     self.active_windows = []
     self.active_games_pending = False
+    self.live_fixture_ids = set()  # IDs tracked as in-play last cycle
     self.IN_PLAY_STATUSES = {'1H', 'HT', '2H', 'ET', 'BT', 'P', 'LIVE', 'INT'}
     self.api_client = SportsAPIClient()
 
@@ -129,24 +130,27 @@ class LiveWorker:
 
       print(f"[WORKER] 📡 {len(live_fixtures)} live globally, {len(live_favorites)} in favorite leagues.")
 
-      # ── 4. Update active_games_pending before the merge ────────────────────
-      was_pending = self.active_games_pending
+      # ── 4. Update active_games_pending and detect finished fixtures ─────────
+      current_ids = {f["fixture"]["id"] for f in live_favorites}
+      finished_ids = self.live_fixture_ids - current_ids  # were live, now gone
+
+      self.live_fixture_ids = current_ids
       self.active_games_pending = any(
         f.get("fixture", {}).get("status", {}).get("short") in self.IN_PLAY_STATUSES
         for f in live_favorites
       )
 
+      # Some fixtures dropped out of the live feed (finished) — force-refresh
+      # the date cache so their final FT status is written to Redis.
+      if finished_ids:
+        print(f"[WORKER] 🏁 {len(finished_ids)} fixture(s) just finished {finished_ids}. Force-refreshing FT status...")
+        match_service = MatchService(db)
+        today_str = datetime.now(self.local_tz).strftime("%Y-%m-%d")
+        match_service.get_matches_by_date(today_str, force_refresh=True)
+        print("[WORKER] ✅ FT status captured.")
+
       if not live_favorites:
-        # Games were live last cycle but vanished from the live feed — they just
-        # finished. Force-refresh the date cache to write the final FT status.
-        if was_pending:
-          print("[WORKER] 🏁 Games just ended. Force-refreshing to capture FT status...")
-          match_service = MatchService(db)
-          today_str = datetime.now(self.local_tz).strftime("%Y-%m-%d")
-          match_service.get_matches_by_date(today_str, force_refresh=True)
-          print("[WORKER] ✅ FT status captured.")
-        else:
-          print("[WORKER] 💤 No live matches in favorite leagues.")
+        print("[WORKER] 💤 No live matches in favorite leagues.")
         return
 
       # ── 5. Merge rich data into existing Redis schedule ────────────────────
