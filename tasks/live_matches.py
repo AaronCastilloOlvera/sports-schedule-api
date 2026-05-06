@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from dateutil import parser
@@ -149,12 +150,26 @@ class LiveWorker:
         for f in live_favorites
       )
 
-      # Some fixtures dropped out of the live feed (finished) — force-refresh
-      # the date cache so their final FT status is written to Redis.
+      # Some fixtures dropped out of the live feed — fetch their final events
+      # then force-refresh so FT status is written (events are preserved).
       if finished_ids:
-        print(f"[WORKER] 🏁 {len(finished_ids)} fixture(s) just finished {finished_ids}. Force-refreshing FT status...")
-        match_service = MatchService(db)
+        print(f"[WORKER] 🏁 {len(finished_ids)} fixture(s) just finished. Fetching final events...")
         today_str = datetime.now(self.local_tz).strftime("%Y-%m-%d")
+        cache_key  = f"matches:date:{today_str}"
+        raw = r.get(cache_key)
+        if raw:
+          base_matches = {m["fixture"]["id"]: m for m in json.loads(raw)}
+          for fid in finished_ids:
+            time.sleep(0.6)
+            final_events = self.api_client.get_fixture_events(fid)
+            if fid in base_matches:
+              base_matches[fid]["events"] = final_events
+              print(f"[WORKER] ✅ fixture {fid} → {len(final_events)} final event(s) captured.")
+          remaining_ttl = r.ttl(cache_key)
+          ttl = remaining_ttl if remaining_ttl > 0 else MATCHES_DATE_TTL
+          r.setex(cache_key, ttl, json.dumps(list(base_matches.values())))
+
+        match_service = MatchService(db)
         match_service.get_matches_by_date(today_str, force_refresh=True)
         print("[WORKER] ✅ FT status captured.")
 

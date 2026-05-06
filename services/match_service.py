@@ -27,13 +27,22 @@ class MatchService:
       # Filter matches by favorite leagues
       favorite_leagues = self.db.query(models.League).filter(models.League.is_favorite == True).all()
       favorite_ids = {league.id for league in favorite_leagues}
-      
+
       filtered_matches = [
-          m for m in all_matches 
+          m for m in all_matches
           if m.get("league", {}).get("id") in favorite_ids
       ]
 
       if self.r:
-        self.r.setex(cache_key, 432000, json.dumps(filtered_matches))  # Cache for 5 days
+        # Preserve events merged by the live worker
+        existing_raw = self.r.get(cache_key)
+        if existing_raw:
+          existing_by_id = {m["fixture"]["id"]: m for m in json.loads(existing_raw)}
+          for match in filtered_matches:
+            fid = match["fixture"]["id"]
+            if fid in existing_by_id and existing_by_id[fid].get("events"):
+              match["events"] = existing_by_id[fid]["events"]
+
+        self.r.setex(cache_key, 432000, json.dumps(filtered_matches))
 
       return { "data": filtered_matches }
