@@ -130,13 +130,23 @@ class LiveWorker:
       print(f"[WORKER] 📡 {len(live_fixtures)} live globally, {len(live_favorites)} in favorite leagues.")
 
       # ── 4. Update active_games_pending before the merge ────────────────────
+      was_pending = self.active_games_pending
       self.active_games_pending = any(
         f.get("fixture", {}).get("status", {}).get("short") in self.IN_PLAY_STATUSES
         for f in live_favorites
       )
 
       if not live_favorites:
-        print("[WORKER] 💤 No live matches in favorite leagues.")
+        # Games were live last cycle but vanished from the live feed — they just
+        # finished. Force-refresh the date cache to write the final FT status.
+        if was_pending:
+          print("[WORKER] 🏁 Games just ended. Force-refreshing to capture FT status...")
+          match_service = MatchService(db)
+          today_str = datetime.now(self.local_tz).strftime("%Y-%m-%d")
+          match_service.get_matches_by_date(today_str, force_refresh=True)
+          print("[WORKER] ✅ FT status captured.")
+        else:
+          print("[WORKER] 💤 No live matches in favorite leagues.")
         return
 
       # ── 5. Merge rich data into existing Redis schedule ────────────────────
