@@ -113,16 +113,23 @@ class LiveWorker:
 
     db = SessionLocal()
     try:
-      # ── 1. Resolve favorite league IDs from DB ─────────────────────────────
+      # ── 1. Restore live_fixture_ids from Redis if process just restarted ─────
+      if not self.live_fixture_ids:
+        raw_ids = r.get("live:tracking_ids")
+        if raw_ids:
+          self.live_fixture_ids = set(json.loads(raw_ids))
+          print(f"[WORKER] 🔄 Restored tracking state from Redis: {self.live_fixture_ids}")
+
+      # ── 2. Resolve favorite league IDs from DB ─────────────────────────────
       favorite_ids = {
         league.id
         for league in db.query(models.League).filter(models.League.is_favorite == True).all()
       }
 
-      # ── 2. Fetch all globally live fixtures ────────────────────────────────
+      # ── 3. Fetch all globally live fixtures ────────────────────────────────
       live_fixtures = self.api_client.get_live_fixtures()
 
-      # ── 3. Filter to favorite leagues only ─────────────────────────────────
+      # ── 4. Filter to favorite leagues only ─────────────────────────────────
       live_favorites = [
         f for f in live_fixtures
         if f.get("league", {}).get("id") in favorite_ids
@@ -130,11 +137,13 @@ class LiveWorker:
 
       print(f"[WORKER] 📡 {len(live_fixtures)} live globally, {len(live_favorites)} in favorite leagues.")
 
-      # ── 4. Update active_games_pending and detect finished fixtures ─────────
+      # ── 5. Update active_games_pending and detect finished fixtures ─────────
       current_ids = {f["fixture"]["id"] for f in live_favorites}
       finished_ids = self.live_fixture_ids - current_ids  # were live, now gone
 
       self.live_fixture_ids = current_ids
+      r.setex("live:tracking_ids", 600, json.dumps(list(current_ids)))
+
       self.active_games_pending = any(
         f.get("fixture", {}).get("status", {}).get("short") in self.IN_PLAY_STATUSES
         for f in live_favorites
@@ -153,7 +162,7 @@ class LiveWorker:
         print("[WORKER] 💤 No live matches in favorite leagues.")
         return
 
-      # ── 5. Merge rich data into existing Redis schedule ────────────────────
+      # ── 6. Merge rich data into existing Redis schedule ────────────────────
       today_str = datetime.now(self.local_tz).strftime("%Y-%m-%d")
       cache_key = f"matches:date:{today_str}"
 
