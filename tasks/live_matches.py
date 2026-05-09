@@ -13,7 +13,10 @@ import pytz
 
 load_dotenv()
 
-MATCHES_DATE_TTL = 432000  # 5 days — matches:date:{YYYY-MM-DD}
+MATCHES_DATE_TTL  = 432000   # 5 days  — matches:date:{YYYY-MM-DD}
+H2H_TTL           = 864000   # 10 days — h2h:teams:{id1}&{id2}
+RECENT_MATCHES_TTL = 86400   # 24 h    — team_recent_matches:{team_id}
+STATS_TTL          = 2592000 # 30 days — fixture_stats:{fixture_id}
 
 
 class LiveWorker:
@@ -87,6 +90,49 @@ class LiveWorker:
         print(f"[WINDOWS ERROR] ❌ {str(e)}")
     finally:
         db.close()
+
+  def _refresh_post_match_caches(self, r, fid, base_matches):
+    """Refreshes H2H and recent-match caches for a just-finished fixture."""
+    if fid not in base_matches:
+      return
+    match_data = base_matches[fid]
+    home_id = match_data["teams"]["home"]["id"]
+    away_id = match_data["teams"]["away"]["id"]
+
+    # H2H
+    ids = sorted([home_id, away_id])
+    h2h_key = f"h2h:teams:{ids[0]}&{ids[1]}"
+    r.delete(h2h_key)
+    time.sleep(0.6)
+    h2h_data = self.api_client.get_headtohead_matches(ids[0], ids[1])
+    if h2h_data:
+      r.setex(h2h_key, H2H_TTL, json.dumps(h2h_data))
+      print(f"[WORKER] ✅ H2H refreshed ({ids[0]} vs {ids[1]}).")
+
+    # Recent matches for home and away team
+    for team_id in (home_id, away_id):
+      team_key = f"team_recent_matches:{team_id}"
+      r.delete(team_key)
+      time.sleep(0.6)
+      fixtures = self.api_client.get_team_last_matches(team_id, last=5)
+      if not fixtures:
+        print(f"[WORKER] ⚠️ No recent fixtures for team {team_id}. Skipping.")
+        continue
+      enriched = []
+      for fixture in fixtures:
+        fixture_id = fixture["fixture"]["id"]
+        stats_key  = f"fixture_stats:{fixture_id}"
+        cached = r.get(stats_key)
+        if cached:
+          stats = json.loads(cached)
+        else:
+          time.sleep(0.6)
+          stats = self.api_client.get_fixture_statistics(fixture_id)
+          if stats:
+            r.setex(stats_key, STATS_TTL, json.dumps(stats))
+        enriched.append({**fixture, "statistics": stats or []})
+      r.setex(team_key, RECENT_MATCHES_TTL, json.dumps(enriched))
+      print(f"[WORKER] ✅ Recent matches refreshed for team {team_id}.")
 
   def run_live_update(self):
     """
@@ -168,6 +214,10 @@ class LiveWorker:
           remaining_ttl = r.ttl(cache_key)
           ttl = remaining_ttl if remaining_ttl > 0 else MATCHES_DATE_TTL
           r.setex(cache_key, ttl, json.dumps(list(base_matches.values())))
+
+          print(f"[WORKER] 🔄 Refreshing H2H and recent-match caches...")
+          for fid in finished_ids:
+            self._refresh_post_match_caches(r, fid, base_matches)
 
         match_service = MatchService(db)
         match_service.get_matches_by_date(today_str, force_refresh=True)
