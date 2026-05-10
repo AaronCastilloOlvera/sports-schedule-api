@@ -3,7 +3,8 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 from alembic import context
 from dotenv import load_dotenv
-from utils.database import Base
+from models.base import Base
+import models  # noqa: F401 — registers all models with Base
 import os
 
 load_dotenv()

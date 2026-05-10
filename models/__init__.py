@@ -2,3 +2,8 @@ from .base import Base
 from .betting_ticket import BettingTicket
 from .country import Country
 from .league import League
+from .fixture import Fixture
+from .fixture_team_stats import FixtureTeamStats
+from .fixture_event import FixtureEvent
+from .fixture_lineup import FixtureLineup
+from .fixture_player_stats import FixturePlayerStats

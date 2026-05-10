@@ -6,6 +6,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 from tasks.prewarm_h2h import PrewarmCacheWorker
 from tasks.live_matches import LiveWorker
 from tasks.prewarm_recent_matches import PrewarmRecentMatchesWorker
+from tasks.prewarm_odds import PrewarmOddsWorker
+from tasks.prewarm_finished_fixtures import PrewarmFinishedFixturesWorker
+from tasks.persist_finished_fixtures import PersistFinishedFixturesWorker
 from dotenv import load_dotenv
 import os
 
@@ -18,11 +21,26 @@ minutes_interval = int(os.getenv("WORKER_INTERVAL_MINUTES", 5))
 
 prewarm_worker = PrewarmCacheWorker()
 recent_matches_worker = PrewarmRecentMatchesWorker()
+odds_worker = PrewarmOddsWorker()
+prewarm_finished_worker = PrewarmFinishedFixturesWorker()
+persist_worker = PersistFinishedFixturesWorker()
+
+
+async def run_persist_pipeline():
+    """
+    Sequential persist pipeline: Prewarm finished fixtures → Persist to DB.
+    Runs after all live windows have closed. Prewarm fetches from API → Redis;
+    persist reads from Redis → PostgreSQL. No API calls in the second step.
+    """
+    logger.info("💾 Persist pipeline starting...")
+    await asyncio.to_thread(prewarm_finished_worker.prewarm_finished_fixtures)
+    await asyncio.to_thread(persist_worker.persist_finished_fixtures)
+    logger.info("💾 Persist pipeline complete.")
 
 
 async def run_nightly_pipeline():
     """
-    Sequential pre-warm pipeline: Matches → H2H → Recent Matches.
+    Sequential pre-warm pipeline: Matches → H2H → Recent Matches → Odds.
     Each task awaits completion before the next one starts.
     asyncio.to_thread() is used because the underlying workers are synchronous.
     """
@@ -30,6 +48,7 @@ async def run_nightly_pipeline():
     await asyncio.to_thread(prewarm_worker.prewarm_match_schedules)
     await asyncio.to_thread(prewarm_worker.prewarm_h2h_data)
     await asyncio.to_thread(recent_matches_worker.prewarm_recent_matches)
+    await asyncio.to_thread(odds_worker.prewarm_odds)
     logger.info("🌙 Nightly pipeline complete.")
 
 
@@ -38,11 +57,7 @@ async def main():
 
     scheduler = AsyncIOScheduler(job_defaults={'max_instances': 1})
 
-    # ==========================================
-    # TASK 1-3: Nightly Pre-warm Pipeline (00:15)
-    # ==========================================
-    # Runs the three pre-warm jobs sequentially in a single pipeline.
-    # Replaces three separate cron jobs (00:30, 00:45, 01:00).
+    # 00:15 — Nightly pre-warm: Matches → H2H → Recent Matches → Odds
     scheduler.add_job(
         run_nightly_pipeline,
         CronTrigger(hour=0, minute=15, timezone='America/Mexico_City'),
@@ -51,9 +66,7 @@ async def main():
         replace_existing=True
     )
 
-    # ==========================================
-    # TASK 4: Live Window Calculator (01:15)
-    # ==========================================
+    # 01:15 — Calculate live windows for the day
     scheduler.add_job(
         live_worker.calculate_live_windows,
         CronTrigger(hour=1, minute=15, timezone='America/Mexico_City'),
@@ -62,9 +75,16 @@ async def main():
         replace_existing=True
     )
 
-    # ==========================================
-    # TASK 5: Live Match Updater (interval)
-    # ==========================================
+    # 02:00 — Persist finished fixtures: API → Redis → PostgreSQL
+    scheduler.add_job(
+        run_persist_pipeline,
+        CronTrigger(hour=2, minute=0, timezone='America/Mexico_City'),
+        id='persist_pipeline',
+        name='Persist Finished Fixtures Pipeline',
+        replace_existing=True
+    )
+
+    # Interval — Live match updater (every WORKER_INTERVAL_MINUTES, default 5)
     scheduler.add_job(
         live_worker.run_live_update,
         IntervalTrigger(minutes=minutes_interval),
