@@ -2,6 +2,8 @@ import os
 import subprocess
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from dotenv import load_dotenv
+from tasks.prewarm_finished_fixtures import PrewarmFinishedFixturesWorker
+from tasks.persist_finished_fixtures import PersistFinishedFixturesWorker
 
 load_dotenv()
 
@@ -49,6 +51,23 @@ async def trigger_sync(background_tasks: BackgroundTasks, tables: list[str] = No
   return {"message": "Database sync initiated in the background."}
 
 
+prewarm_finished_worker = PrewarmFinishedFixturesWorker()
+persist_worker = PersistFinishedFixturesWorker()
 
-    
-    
+def run_persist_pipeline(date: str):
+  prewarm_finished_worker.prewarm_finished_fixtures(date)
+  persist_worker.persist_finished_fixtures(date)
+
+@router.post("/persist-fixtures")
+async def trigger_persist_fixtures(background_tasks: BackgroundTasks, date: str):
+  """
+  Trigger the persist pipeline for a specific date (YYYY-MM-DD).
+  Useful for backfilling or re-running a failed nightly job.
+  Localhost-only.
+  """
+  if os.getenv("APP_ENV") != "localhost":
+    raise HTTPException(status_code=403, detail="This endpoint is only allowed in localhost environment.")
+
+  background_tasks.add_task(run_persist_pipeline, date)
+  return {"message": f"Persist pipeline initiated for {date}."}
+

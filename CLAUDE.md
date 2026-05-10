@@ -129,6 +129,37 @@ Populated nightly by `run_persist_pipeline()` after matches finish. The `fixture
 
 **Alembic** — `migrations/env.py` imports `Base` from `models.base` and imports the `models` package so all models register for autogenerate detection. When adding a new model: create the file, import it in `models/__init__.py`, then run `alembic revision --autogenerate`.
 
+## Future plans / Next features
+
+### Feature: Historical fixture backfill worker
+
+Un worker que recorre temporadas anteriores hacia atrás y persiste fixtures históricos para enriquecer el dataset de entrenamiento del modelo ML.
+
+**Comportamiento clave — API-aware:**
+Antes de cada ejecución, el worker debe consultar el uso actual de la API (`GET /status` en API-Sports devuelve llamadas usadas/disponibles del día) y calcular cuántos fixtures puede procesar sin exceder el límite diario. Con 7,500 llamadas/día y ~1,500 de consumo base, hay ~6,000 disponibles. A 3 llamadas por fixture (events + lineups + player_stats), puede procesar ~2,000 fixtures por día si no hay otros jobs corriendo — en la práctica dejar un margen y procesar ~50-100 fixtures por ejecución.
+
+**Diseño sugerido:**
+- Nuevo endpoint `GET /status/usage` ya existe — usarlo para calcular el presupuesto disponible antes de iniciar.
+- El worker recibe una `league_id` y una `season` como parámetros.
+- Llama a `GET /fixtures?league={id}&season={year}` para obtener todos los fixture IDs de esa temporada.
+- Filtra los que ya existen en `fixtures` (idempotente).
+- Procesa hasta N fixtures según el presupuesto de API disponible, guarda el progreso (último fixture procesado) para reanudar en la siguiente ejecución.
+- Misma lógica que `prewarm_finished_fixtures` + `persist_finished_fixtures` pero sin depender de Redis de matches del día.
+- Correr manualmente vía endpoint dev-tools, no como cron automático.
+
+**Advertencia:** statistics (`/fixtures/statistics`) puede no estar disponible para partidos muy antiguos dependiendo del plan y la liga.
+
+### Feature: Data retention worker
+
+Un job que borra automáticamente fixtures y sus datos relacionados que superen N años de antigüedad, para mantener el tamaño de la BD acotado.
+
+- `N` configurable vía variable de entorno (e.g. `FIXTURE_RETENTION_YEARS=10`).
+- Borra en cascada: `fixture_player_stats` → `fixture_lineups` → `fixture_events` → `fixture_team_stats` → `fixtures`.
+- Correr como cron mensual o trimestral — no necesita ser frecuente.
+- Loggear cuántos fixtures se eliminaron y notificar por Telegram.
+
+---
+
 ## ML feature notes
 
 The fixture persistence tables are designed for training match outcome prediction models.

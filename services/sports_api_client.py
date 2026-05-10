@@ -88,15 +88,15 @@ class SportsAPIClient:
       print(f"Error fetching lineups for fixture {fixture_id}: {e}")
       return []
 
-  def get_player_statistics(self, fixture_id: int, team_id: int):
-    url = f"{self.base_url}/players"
-    params = {"fixture": fixture_id, "team": team_id}
+  def get_fixture_player_statistics(self, fixture_id: int):
+    url = f"{self.base_url}/fixtures/players"
+    params = {"fixture": fixture_id}
     try:
       response = requests.get(url, headers=self.headers, params=params)
       response.raise_for_status()
       return response.json().get("response", [])
     except requests.RequestException as e:
-      print(f"Error fetching player stats for fixture {fixture_id}, team {team_id}: {e}")
+      print(f"Error fetching player stats for fixture {fixture_id}: {e}")
       return []
 
   def get_odds_by_fixture(self, fixture_id: int):

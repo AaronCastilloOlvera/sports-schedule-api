@@ -23,14 +23,14 @@ class PrewarmFinishedFixturesWorker:
         self.local_tz = pytz.timezone('America/Mexico_City')
         self.api_client = SportsAPIClient()
         self.notification_service = NotificationService()
-        self.r, _ = get_redis_connection()
 
-    def prewarm_finished_fixtures(self):
-        today = datetime.now(self.local_tz).strftime("%Y-%m-%d")
+    def prewarm_finished_fixtures(self, date: str = None):
+        today = date or datetime.now(self.local_tz).strftime("%Y-%m-%d")
         local_time = datetime.now(self.local_tz).strftime("%H:%M:%S")
         print(f"PREWARM FINISHED 🚀 {local_time} - Fetching data for finished fixtures on {today}")
 
-        if not self.r:
+        r, _ = get_redis_connection()
+        if not r:
             print("PREWARM FINISHED 🚨 Redis unavailable, skipping.")
             return
 
@@ -51,41 +51,35 @@ class PrewarmFinishedFixturesWorker:
 
                 # statistics — might already be cached 30 days by routes/teams.py
                 stats_key = f"fixture_stats:{fixture_id}"
-                if not self.r.exists(stats_key):
+                if not r.exists(stats_key):
                     data = self.api_client.get_fixture_statistics(fixture_id)
-                    if data:
-                        self.r.setex(stats_key, STATS_TTL, json.dumps(data))
+                    if data is not None:
+                        r.setex(stats_key, STATS_TTL, json.dumps(data))
                     time.sleep(0.6)
 
                 # events
                 events_key = f"fixture_events:{fixture_id}"
-                if not self.r.exists(events_key):
+                if not r.exists(events_key):
                     data = self.api_client.get_fixture_events(fixture_id)
                     if data is not None:
-                        self.r.setex(events_key, EVENTS_TTL, json.dumps(data))
+                        r.setex(events_key, EVENTS_TTL, json.dumps(data))
                     time.sleep(0.6)
 
                 # lineups
                 lineups_key = f"fixture_lineups:{fixture_id}"
-                if not self.r.exists(lineups_key):
+                if not r.exists(lineups_key):
                     data = self.api_client.get_fixture_lineups(fixture_id)
                     if data is not None:
-                        self.r.setex(lineups_key, LINEUPS_TTL, json.dumps(data))
+                        r.setex(lineups_key, LINEUPS_TTL, json.dumps(data))
                     time.sleep(0.6)
 
-                # player stats — 2 calls (one per team), combined into a single key
+                # player stats — 1 call, returns both teams
                 player_stats_key = f"fixture_player_stats:{fixture_id}"
-                if not self.r.exists(player_stats_key):
-                    home_stats = self.api_client.get_player_statistics(fixture_id, home_team_id)
+                if not r.exists(player_stats_key):
+                    data = self.api_client.get_fixture_player_statistics(fixture_id)
+                    if data is not None:
+                        r.setex(player_stats_key, PLAYER_STATS_TTL, json.dumps(data))
                     time.sleep(0.6)
-                    away_stats = self.api_client.get_player_statistics(fixture_id, away_team_id)
-                    time.sleep(0.6)
-                    combined = (
-                        [{"team_id": home_team_id, **p} for p in home_stats] +
-                        [{"team_id": away_team_id, **p} for p in away_stats]
-                    )
-                    if combined:
-                        self.r.setex(player_stats_key, PLAYER_STATS_TTL, json.dumps(combined))
 
                 print(f"  -> Prewarmed fixture {fixture_id}")
 

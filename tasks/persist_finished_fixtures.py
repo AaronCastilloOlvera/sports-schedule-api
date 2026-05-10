@@ -21,7 +21,6 @@ class PersistFinishedFixturesWorker:
     def __init__(self):
         self.local_tz = pytz.timezone('America/Mexico_City')
         self.notification_service = NotificationService()
-        self.r, _ = get_redis_connection()
 
     # ------------------------------------------------------------------ helpers
 
@@ -154,6 +153,8 @@ class PersistFinishedFixturesWorker:
             formation = entry.get("formation")
             for p in entry.get("startXI", []):
                 pl = p.get("player", {})
+                if not pl.get("id"):
+                    continue
                 rows.append(FixtureLineup(
                     fixture_id=fixture_id,
                     team_id=team["id"],
@@ -168,6 +169,8 @@ class PersistFinishedFixturesWorker:
                 ))
             for p in entry.get("substitutes", []):
                 pl = p.get("player", {})
+                if not pl.get("id"):
+                    continue
                 rows.append(FixtureLineup(
                     fixture_id=fixture_id,
                     team_id=team["id"],
@@ -184,66 +187,68 @@ class PersistFinishedFixturesWorker:
 
     def _build_player_stats(self, fixture_id, raw_player_stats):
         rows = []
-        for entry in raw_player_stats:
-            player = entry.get("player", {})
-            team_id = entry.get("team_id")
-            stats_list = entry.get("statistics", [{}])
-            s = stats_list[0] if stats_list else {}
-
-            games = s.get("games", {})
-            shots = s.get("shots", {})
-            goals = s.get("goals", {})
-            passes = s.get("passes", {})
-            tackles = s.get("tackles", {})
-            duels = s.get("duels", {})
-            dribbles = s.get("dribbles", {})
-            fouls = s.get("fouls", {})
-            cards = s.get("cards", {})
-            penalty = s.get("penalty", {})
-
-            rows.append(FixturePlayerStats(
-                fixture_id=fixture_id,
-                team_id=team_id,
-                player_id=player["id"],
-                player_name=player["name"],
-                minutes_played=self._safe_int(games.get("minutes")),
-                rating=self._safe_decimal(games.get("rating")),
-                captain=games.get("captain"),
-                substitute=games.get("substitute"),
-                goals=self._safe_int(goals.get("total")),
-                assists=self._safe_int(goals.get("assists")),
-                goals_conceded=self._safe_int(goals.get("conceded")),
-                saves=self._safe_int(goals.get("saves")),
-                shots_total=self._safe_int(shots.get("total")),
-                shots_on_target=self._safe_int(shots.get("on")),
-                passes_total=self._safe_int(passes.get("total")),
-                passes_key=self._safe_int(passes.get("key")),
-                passes_accuracy=self._safe_int(passes.get("accuracy")),
-                tackles_total=self._safe_int(tackles.get("total")),
-                tackles_blocks=self._safe_int(tackles.get("blocks")),
-                tackles_interceptions=self._safe_int(tackles.get("interceptions")),
-                duels_total=self._safe_int(duels.get("total")),
-                duels_won=self._safe_int(duels.get("won")),
-                dribbles_attempts=self._safe_int(dribbles.get("attempts")),
-                dribbles_success=self._safe_int(dribbles.get("success")),
-                fouls_committed=self._safe_int(fouls.get("committed")),
-                fouls_drawn=self._safe_int(fouls.get("drawn")),
-                yellow_cards=self._safe_int(cards.get("yellow")),
-                red_cards=self._safe_int(cards.get("red")),
-                penalty_scored=self._safe_int(penalty.get("scored")),
-                penalty_missed=self._safe_int(penalty.get("missed")),
-                penalty_saved=self._safe_int(penalty.get("saved")),
-            ))
+        # /fixtures/players response: [{team: {id, name}, players: [{player, statistics}]}]
+        for team_entry in raw_player_stats:
+            team_id = team_entry.get("team", {}).get("id")
+            for entry in team_entry.get("players", []):
+                player = entry.get("player", {})
+                if not player.get("id"):
+                    continue
+                s = (entry.get("statistics") or [{}])[0]
+                games = s.get("games", {})
+                shots = s.get("shots", {})
+                goals = s.get("goals", {})
+                passes = s.get("passes", {})
+                tackles = s.get("tackles", {})
+                duels = s.get("duels", {})
+                dribbles = s.get("dribbles", {})
+                fouls = s.get("fouls", {})
+                cards = s.get("cards", {})
+                penalty = s.get("penalty", {})
+                rows.append(FixturePlayerStats(
+                    fixture_id=fixture_id,
+                    team_id=team_id,
+                    player_id=player["id"],
+                    player_name=player["name"],
+                    minutes_played=self._safe_int(games.get("minutes")),
+                    rating=self._safe_decimal(games.get("rating")),
+                    captain=games.get("captain"),
+                    substitute=games.get("substitute"),
+                    goals=self._safe_int(goals.get("total")),
+                    assists=self._safe_int(goals.get("assists")),
+                    goals_conceded=self._safe_int(goals.get("conceded")),
+                    saves=self._safe_int(goals.get("saves")),
+                    shots_total=self._safe_int(shots.get("total")),
+                    shots_on_target=self._safe_int(shots.get("on")),
+                    passes_total=self._safe_int(passes.get("total")),
+                    passes_key=self._safe_int(passes.get("key")),
+                    passes_accuracy=self._safe_int(passes.get("accuracy")),
+                    tackles_total=self._safe_int(tackles.get("total")),
+                    tackles_blocks=self._safe_int(tackles.get("blocks")),
+                    tackles_interceptions=self._safe_int(tackles.get("interceptions")),
+                    duels_total=self._safe_int(duels.get("total")),
+                    duels_won=self._safe_int(duels.get("won")),
+                    dribbles_attempts=self._safe_int(dribbles.get("attempts")),
+                    dribbles_success=self._safe_int(dribbles.get("success")),
+                    fouls_committed=self._safe_int(fouls.get("committed")),
+                    fouls_drawn=self._safe_int(fouls.get("drawn")),
+                    yellow_cards=self._safe_int(cards.get("yellow")),
+                    red_cards=self._safe_int(cards.get("red")),
+                    penalty_scored=self._safe_int(penalty.get("scored")),
+                    penalty_missed=self._safe_int(penalty.get("missed")),
+                    penalty_saved=self._safe_int(penalty.get("saved")),
+                ))
         return rows
 
     # ------------------------------------------------------------------ main job
 
-    def persist_finished_fixtures(self):
-        today = datetime.now(self.local_tz).strftime("%Y-%m-%d")
+    def persist_finished_fixtures(self, date: str = None):
+        today = date or datetime.now(self.local_tz).strftime("%Y-%m-%d")
         local_time = datetime.now(self.local_tz).strftime("%H:%M:%S")
         print(f"PERSIST FINISHED 🚀 {local_time} - Persisting finished fixtures for {today}")
 
-        if not self.r:
+        r, _ = get_redis_connection()
+        if not r:
             print("PERSIST FINISHED 🚨 Redis unavailable, skipping.")
             return
 
@@ -263,19 +268,26 @@ class PersistFinishedFixturesWorker:
                 fixture_id = match["fixture"]["id"]
                 home_team_id = match["teams"]["home"]["id"]
 
+                # read all data from Redis — no API calls here
+                raw_stats = r.get(f"fixture_stats:{fixture_id}")
+                raw_events = r.get(f"fixture_events:{fixture_id}")
+                raw_lineups = r.get(f"fixture_lineups:{fixture_id}")
+                raw_player_stats = r.get(f"fixture_player_stats:{fixture_id}")
+
                 # skip if already persisted (idempotent)
                 if db.query(Fixture).filter(Fixture.id == fixture_id).first():
                     skipped += 1
                     continue
 
-                # read all data from Redis — no API calls here
-                raw_stats = self.r.get(f"fixture_stats:{fixture_id}")
-                raw_events = self.r.get(f"fixture_events:{fixture_id}")
-                raw_lineups = self.r.get(f"fixture_lineups:{fixture_id}")
-                raw_player_stats = self.r.get(f"fixture_player_stats:{fixture_id}")
-
-                if not all([raw_stats, raw_events, raw_lineups, raw_player_stats]):
-                    print(f"  -> ⚠️ Incomplete Redis data for fixture {fixture_id}, skipping.")
+                missing = [
+                    name for name, val in [
+                        ("stats", raw_stats),
+                        ("events", raw_events),
+                        ("lineups", raw_lineups),
+                    ] if not val
+                ]
+                if missing:
+                    print(f"  -> ⚠️ fixture {fixture_id} missing: {', '.join(missing)} — skipping.")
                     skipped += 1
                     continue
 
@@ -287,8 +299,9 @@ class PersistFinishedFixturesWorker:
                     db.add(row)
                 for row in self._build_lineups(fixture_id, json.loads(raw_lineups)):
                     db.add(row)
-                for row in self._build_player_stats(fixture_id, json.loads(raw_player_stats)):
-                    db.add(row)
+                if raw_player_stats:
+                    for row in self._build_player_stats(fixture_id, json.loads(raw_player_stats)):
+                        db.add(row)
 
                 db.commit()
                 saved += 1
