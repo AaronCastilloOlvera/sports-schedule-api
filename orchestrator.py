@@ -24,63 +24,35 @@ recent_matches_worker = PrewarmRecentMatchesWorker()
 odds_worker = PrewarmOddsWorker()
 prewarm_finished_worker = PrewarmFinishedFixturesWorker()
 persist_worker = PersistFinishedFixturesWorker()
-
-
-async def run_persist_pipeline():
-    """
-    Sequential persist pipeline: Prewarm finished fixtures → Persist to DB.
-    Runs after all live windows have closed. Prewarm fetches from API → Redis;
-    persist reads from Redis → PostgreSQL. No API calls in the second step.
-    """
-    logger.info("💾 Persist pipeline starting...")
-    await asyncio.to_thread(prewarm_finished_worker.prewarm_finished_fixtures)
-    await asyncio.to_thread(persist_worker.persist_finished_fixtures)
-    logger.info("💾 Persist pipeline complete.")
+live_worker = LiveWorker()
 
 
 async def run_nightly_pipeline():
     """
-    Sequential pre-warm pipeline: Matches → H2H → Recent Matches → Odds.
-    Each task awaits completion before the next one starts.
-    asyncio.to_thread() is used because the underlying workers are synchronous.
+    Full nightly pipeline (00:15 MX):
+      Matches → H2H → Recent Matches → Odds → Live Windows → Persist finished fixtures
+    Steps run sequentially; each awaits completion before the next starts.
     """
     logger.info("🌙 Nightly pipeline starting...")
     await asyncio.to_thread(prewarm_worker.prewarm_match_schedules)
     await asyncio.to_thread(prewarm_worker.prewarm_h2h_data)
+    await asyncio.to_thread(live_worker.calculate_live_windows)
     await asyncio.to_thread(recent_matches_worker.prewarm_recent_matches)
     await asyncio.to_thread(odds_worker.prewarm_odds)
+    await asyncio.to_thread(prewarm_finished_worker.prewarm_finished_fixtures)
+    await asyncio.to_thread(persist_worker.persist_finished_fixtures)
     logger.info("🌙 Nightly pipeline complete.")
 
 
 async def main():
-    live_worker = LiveWorker()
-
     scheduler = AsyncIOScheduler(job_defaults={'max_instances': 1})
 
-    # 00:15 — Nightly pre-warm: Matches → H2H → Recent Matches → Odds
+    # 00:15 — Full nightly pipeline
     scheduler.add_job(
         run_nightly_pipeline,
         CronTrigger(hour=0, minute=15, timezone='America/Mexico_City'),
         id='nightly_pipeline',
-        name='Nightly Pre-warm Pipeline',
-        replace_existing=True
-    )
-
-    # 01:15 — Calculate live windows for the day
-    scheduler.add_job(
-        live_worker.calculate_live_windows,
-        CronTrigger(hour=1, minute=15, timezone='America/Mexico_City'),
-        id='window_calculator_worker',
-        name='Window Calculator Worker',
-        replace_existing=True
-    )
-
-    # 02:00 — Persist finished fixtures: API → Redis → PostgreSQL
-    scheduler.add_job(
-        run_persist_pipeline,
-        CronTrigger(hour=2, minute=0, timezone='America/Mexico_City'),
-        id='persist_pipeline',
-        name='Persist Finished Fixtures Pipeline',
+        name='Nightly Pipeline',
         replace_existing=True
     )
 

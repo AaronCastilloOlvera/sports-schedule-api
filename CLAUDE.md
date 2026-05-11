@@ -40,7 +40,7 @@ Route → Service → (Redis → SportsAPIClient fallback) + DB filtering
 
 The only exception: `routes/teams.py` manages its own Redis cache directly (acceptable for its limited scope).
 
-`routes/dev_tools.py` endpoints (e.g. DB sync) are **localhost-only** — they must not be exposed in production.
+`routes/dev_tools.py` endpoints are **localhost-only** — they must not be exposed in production. Current endpoints: `POST /dev-tools/sync-db`, `POST /dev-tools/persist-fixtures?date=YYYY-MM-DD`.
 
 ### Background job chain
 
@@ -70,6 +70,19 @@ All times are `America/Mexico_City`. Jobs that depend on previous output are gro
 
 `run_live_update` skips the API call if the current UTC time is outside every active window **and** `active_games_pending` is `False`.
 
+### Two data sources — why both exist
+
+**Redis** holds ephemeral, frequently-read data that serves live API traffic. Keys expire automatically; losing Redis degrades the API but never loses permanent data. All keys here are read by HTTP endpoints to avoid hitting API-Sports on every request.
+
+**PostgreSQL** holds permanent data that never expires. Fixture detail tables exist exclusively for ML training — they are never read by live API endpoints (no endpoint queries `fixture_events` or `fixture_lineups` from the DB today; future endpoints will).
+
+| Data | Where | Why |
+|---|---|---|
+| Live match data | Redis only | Written every 5 min by `run_live_update`, read by every frontend poll simultaneously — high read/write frequency makes DB a bottleneck |
+| Today's match schedules, H2H, recent matches, odds | Redis only | Cached to avoid repeated API-Sports calls, not for DB performance — these could live in PostgreSQL but that would burn API quota on every request |
+| Finished fixture details (events, lineups, player stats, team stats) | **DB only** (via nightly pipeline) | Static after the match ends; only needed for ML training |
+| League registry, betting tickets | DB only | User data — must be permanent |
+
 ### Redis
 
 `get_redis_connection()` returns a `(client, error)` tuple — `client` may be `None`. Every caller must handle this gracefully; Redis is non-critical (the API returns `207 Degraded` when Redis is down but DB is healthy).
@@ -81,10 +94,7 @@ All times are `America/Mexico_City`. Jobs that depend on previous output are gro
 | `matches:date:{YYYY-MM-DD}` | 5 days | `MatchService` |
 | `h2h:teams:{id1}&{id2}` | 10 days | `H2HService` |
 | `team_recent_matches:{team_id}` | 24 h | `routes/teams.py` |
-| `fixture_stats:{fixture_id}` | 30 days | `routes/teams.py` + `PrewarmFinishedFixturesWorker` (fallback) |
-| `fixture_events:{fixture_id}` | 48 h | `PrewarmFinishedFixturesWorker` |
-| `fixture_lineups:{fixture_id}` | 48 h | `PrewarmFinishedFixturesWorker` |
-| `fixture_player_stats:{fixture_id}` | 48 h | `PrewarmFinishedFixturesWorker` |
+| `fixture_stats:{fixture_id}` | 30 days | `routes/teams.py` (serves recent-matches endpoint) |
 | `ml_recent_matches:{team_id}` | 24 h | `routes/ml.py` (fallback when prewarm cache is absent) |
 | `odds:{fixture_id}` | 12 h | `OddsService` |
 
@@ -157,6 +167,20 @@ Un job que borra automáticamente fixtures y sus datos relacionados que superen 
 - Borra en cascada: `fixture_player_stats` → `fixture_lineups` → `fixture_events` → `fixture_team_stats` → `fixtures`.
 - Correr como cron mensual o trimestral — no necesita ser frecuente.
 - Loggear cuántos fixtures se eliminaron y notificar por Telegram.
+
+---
+
+## Possible improvements
+
+| # | Area | Issue | Fix |
+|---|---|---|---|
+| 1 | **Logging** | `print()` everywhere — no log levels, no structured output | Replace with Python `logging` module; use `INFO`/`WARNING`/`ERROR` levels |
+| 2 | **Persist pipeline** | Two workers using Redis as staging buffer for data only they consume | Merge into one worker: API → DB directly, skip Redis for events/lineups/player_stats |
+| 3 | **Auth** | Zero authentication on any endpoint — dev-tools rely on `APP_ENV` env check | Add API key header check at minimum; use middleware so it's not per-route |
+| 4 | **Error handling** | API-Sports failures are silently swallowed — no retry, no alerting | Add retry with exponential backoff on transient failures; Telegram alert on repeated failure |
+| 5 | **Orchestrator resilience** | If orchestrator crashes, no automatic restart | Use Railway's restart policy or a process supervisor |
+| 6 | **Migrations** | Alembic runs manually — easy to forget on deploy | Add `alembic upgrade head` as a release command in Railway |
+| 7 | **Tests** | No test suite | At minimum: unit tests for `_build_*` methods in persist worker and service layer |
 
 ---
 
