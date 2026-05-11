@@ -1,5 +1,5 @@
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytz
 
@@ -243,9 +243,9 @@ class PersistFinishedFixturesWorker:
     # ------------------------------------------------------------------ main job
 
     def persist_finished_fixtures(self, date: str = None):
-        today = date or datetime.now(self.local_tz).strftime("%Y-%m-%d")
+        yesterday = date or (datetime.now(self.local_tz) - timedelta(days=1)).strftime("%Y-%m-%d")
         local_time = datetime.now(self.local_tz).strftime("%H:%M:%S")
-        print(f"PERSIST FINISHED 🚀 {local_time} - Persisting finished fixtures for {today}")
+        print(f"PERSIST FINISHED 🚀 {local_time} - Persisting finished fixtures for {yesterday}")
 
         r, _ = get_redis_connection()
         if not r:
@@ -255,7 +255,7 @@ class PersistFinishedFixturesWorker:
         db = SessionLocal()
         try:
             match_service = MatchService(db)
-            matches = match_service.get_matches_by_date(today)
+            matches = match_service.get_matches_by_date(yesterday)
             finished = [
                 m for m in matches.get("data", [])
                 if m.get("fixture", {}).get("status", {}).get("short") in FINISHED_STATUSES
