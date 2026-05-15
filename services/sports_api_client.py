@@ -66,9 +66,9 @@ class SportsAPIClient:
       print(f"Error fetching live fixtures: {e}")
       return []
 
-  def get_headtohead_matches(self, team1: int, team2: int):
+  def get_headtohead_matches(self, team1: int, team2: int, last: int = 10):
     url = f"{self.base_url}/fixtures/headtohead"
-    params = {"h2h": f"{team1}-{team2}"}
+    params = {"h2h": f"{team1}-{team2}", "last": last}
     try:
       response = requests.get(url, headers=self.headers, params=params)
       response.raise_for_status()

@@ -1,48 +1,44 @@
-import json
-import time
-from fastapi import APIRouter, HTTPException
-from utils.redis_client import get_redis_connection
-from services.sports_api_client import SportsAPIClient
+from fastapi import APIRouter, Depends
+from sqlalchemy.orm import Session
+from sqlalchemy import or_
+
+from utils import database
+from models.fixture import Fixture
+from models.fixture_team_stats import FixtureTeamStats
+from models.league import League
+from utils.fixture_serializer import serialize_fixture
 
 router = APIRouter(prefix="/teams", tags=["teams"])
 
-RECENT_MATCHES_TTL = 86400  # 24 hours  — team_recent_matches:{team_id}
-STATS_TTL = 2592000  # 30 days   — fixture_stats:{fixture_id}
+FINISHED_STATUSES = {"FT", "AET", "PEN"}
+
 
 @router.get("/{team_id}/recent-matches")
-def get_team_recent_matches(team_id: int):
-    r, redis_error = get_redis_connection()
-    if r is None:
-        raise HTTPException(status_code=500, detail=f"Redis unavailable: {redis_error}")
+def get_team_recent_matches(team_id: int, db: Session = Depends(database.get_db)):
+    fixtures = (
+        db.query(Fixture)
+        .filter(
+            or_(Fixture.home_team_id == team_id, Fixture.away_team_id == team_id),
+            Fixture.status.in_(FINISHED_STATUSES),
+        )
+        .order_by(Fixture.date_utc.desc())
+        .limit(5)
+        .all()
+    )
 
-    # ── Cache hit ──────────────────────────────────────────────────────────────
-    cached = r.get(f"team_recent_matches:{team_id}")
-    if cached:
-        return {"team_id": team_id, "source": "cache", "data": json.loads(cached)}
+    league_ids = {f.league_id for f in fixtures if f.league_id}
+    leagues = {
+        l.id: l.name
+        for l in db.query(League).filter(League.id.in_(league_ids)).all()
+    }
 
-    # ── Cache miss: assemble from API ──────────────────────────────────────────
-    api = SportsAPIClient()
-
-    fixtures = api.get_team_last_matches(team_id, last=5)
-    if not fixtures:
-        raise HTTPException(status_code=404, detail=f"No recent fixtures found for team {team_id}.")
-
-    enriched = []
+    result = []
     for fixture in fixtures:
-        fixture_id = fixture["fixture"]["id"]
-        stats_key  = f"fixture_stats:{fixture_id}"
+        stats = (
+            db.query(FixtureTeamStats)
+            .filter(FixtureTeamStats.fixture_id == fixture.id)
+            .all()
+        )
+        result.append(serialize_fixture(fixture, stats, leagues.get(fixture.league_id)))
 
-        raw = r.get(stats_key)
-        if raw:
-            stats = json.loads(raw)
-        else:
-            time.sleep(0.6)  # respect API-Sports per-second rate limit
-            stats = api.get_fixture_statistics(fixture_id)
-            if stats:
-                r.setex(stats_key, STATS_TTL, json.dumps(stats))
-
-        enriched.append({**fixture, "statistics": stats})
-
-    r.setex(f"team_recent_matches:{team_id}", RECENT_MATCHES_TTL, json.dumps(enriched))
-
-    return {"team_id": team_id, "source": "assembled", "data": enriched}
+    return {"team_id": team_id, "data": result}

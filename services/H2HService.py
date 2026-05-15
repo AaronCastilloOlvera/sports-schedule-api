@@ -1,28 +1,47 @@
-import json
-from services.sports_api_client import SportsAPIClient
-from utils.redis_client import get_redis_connection
+from sqlalchemy.orm import Session
+from sqlalchemy import or_, and_
+
+from models.fixture import Fixture
+from models.fixture_team_stats import FixtureTeamStats
+from models.league import League
+from utils.fixture_serializer import serialize_fixture
+
+FINISHED_STATUSES = {"FT", "AET", "PEN"}
+
 
 class H2HService:
-  def __init__(self):
-    self.api_client = SportsAPIClient()
-    self.r, _ = get_redis_connection()
-  
-  def get_headtohead_matches(self, team1: int, team2: int, force_refresh: bool = False):
-    """
-    Get head-to-head matches between two teams, with Redis caching.
-    """
-    ids = sorted([team1, team2])
-    cache_key = f"h2h:teams:{ids[0]}&{ids[1]}"
 
-    if self.r and not force_refresh:
-      cached_data = self.r.get(cache_key)
-      if cached_data:
-        return { "data": json.loads(cached_data) }
+    def __init__(self, db: Session):
+        self.db = db
 
-    # Fetch from external API if not in cache (or force_refresh=True)
-    h2h_data = self.api_client.get_headtohead_matches(ids[0], ids[1])
+    def get_headtohead_matches(self, team1: int, team2: int):
+        fixtures = (
+            self.db.query(Fixture)
+            .filter(
+                or_(
+                    and_(Fixture.home_team_id == team1, Fixture.away_team_id == team2),
+                    and_(Fixture.home_team_id == team2, Fixture.away_team_id == team1),
+                ),
+                Fixture.status.in_(FINISHED_STATUSES),
+            )
+            .order_by(Fixture.date_utc.desc())
+            .limit(10)
+            .all()
+        )
 
-    if self.r and h2h_data:
-      self.r.setex(cache_key, 864000, json.dumps(h2h_data)) # Cache for 10 days
+        league_ids = {f.league_id for f in fixtures if f.league_id}
+        leagues = {
+            l.id: l.name
+            for l in self.db.query(League).filter(League.id.in_(league_ids)).all()
+        }
 
-    return { "data": h2h_data}
+        result = []
+        for fixture in fixtures:
+            stats = (
+                self.db.query(FixtureTeamStats)
+                .filter(FixtureTeamStats.fixture_id == fixture.id)
+                .all()
+            )
+            result.append(serialize_fixture(fixture, stats, leagues.get(fixture.league_id)))
+
+        return {"data": result}

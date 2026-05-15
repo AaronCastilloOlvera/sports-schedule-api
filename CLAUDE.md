@@ -35,10 +35,9 @@ Two independent entry points:
 Routes are thin HTTP contracts. All business logic lives in `services/`:
 
 ```
-Route → Service → (Redis → SportsAPIClient fallback) + DB filtering
+Route → Service → DB query (historical data)
+Route → Service → Redis (live/today's schedule, odds)
 ```
-
-The only exception: `routes/teams.py` manages its own Redis cache directly (acceptable for its limited scope).
 
 `routes/dev_tools.py` endpoints are **localhost-only** — they must not be exposed in production. Current endpoints: `POST /dev-tools/sync-db`, `POST /dev-tools/persist-fixtures?date=YYYY-MM-DD`.
 
@@ -48,18 +47,16 @@ All times are `America/Mexico_City`. Jobs that depend on previous output are gro
 
 ```
 00:15  run_nightly_pipeline()
+
+         Phase 1 — Redis / prep
          ├── prewarm_match_schedules()   →  matches:date:{YYYY-MM-DD}
-         ├── prewarm_h2h_data()          →  h2h:teams:{id1}&{id2}        (reads pipeline step 1)
-         ├── prewarm_recent_matches()    →  team_recent_matches:{team_id} (reads pipeline step 1)
-         └── prewarm_odds()              →  odds:{fixture_id}             (reads pipeline step 1)
+         ├── calculate_live_windows()    →  LiveWorker.active_windows     (reads step 1)
+         └── prewarm_odds()              →  odds:{fixture_id}             (reads step 1)
 
-01:15  calculate_live_windows()         →  LiveWorker.active_windows     (reads nightly pipeline output)
-
-02:00  run_persist_pipeline()
-         ├── prewarm_finished_fixtures() →  fixture_events:{fixture_id}
-         │                                  fixture_lineups:{fixture_id}
-         │                                  fixture_player_stats:{fixture_id}
-         └── persist_finished_fixtures() →  PostgreSQL (reads all Redis keys above)
+         Phase 2 — DB persist
+         ├── persist_recent_matches()    →  PostgreSQL últimos 5 por equipo (API → BD)
+         ├── persist_h2h_fixtures()      →  PostgreSQL H2H history         (API → BD)
+         └── persist_finished_fixtures() →  PostgreSQL finished fixtures   (API → BD)
 
 ∞      run_live_update()                (interval: WORKER_INTERVAL_MINUTES, default 5)
 ```
@@ -72,15 +69,16 @@ All times are `America/Mexico_City`. Jobs that depend on previous output are gro
 
 ### Two data sources — why both exist
 
-**Redis** holds ephemeral, frequently-read data that serves live API traffic. Keys expire automatically; losing Redis degrades the API but never loses permanent data. All keys here are read by HTTP endpoints to avoid hitting API-Sports on every request.
+**Redis** holds ephemeral data that changes frequently or needs sub-millisecond access under high concurrency. Keys expire automatically; losing Redis degrades the API but never loses permanent data.
 
-**PostgreSQL** holds permanent data that never expires. Fixture detail tables exist exclusively for ML training — they are never read by live API endpoints (no endpoint queries `fixture_events` or `fixture_lineups` from the DB today; future endpoints will).
+**PostgreSQL** holds all permanent data — both for ML training and for serving API endpoints. Historical fixture data (H2H, recent matches) is read directly from the DB by live endpoints.
 
 | Data | Where | Why |
 |---|---|---|
 | Live match data | Redis only | Written every 5 min by `run_live_update`, read by every frontend poll simultaneously — high read/write frequency makes DB a bottleneck |
-| Today's match schedules, H2H, recent matches, odds | Redis only | Cached to avoid repeated API-Sports calls, not for DB performance — these could live in PostgreSQL but that would burn API quota on every request |
-| Finished fixture details (events, lineups, player stats, team stats) | **DB only** (via nightly pipeline) | Static after the match ends; only needed for ML training |
+| Today's match schedules, odds | Redis only | Ephemeral — change frequently and don't need permanent storage |
+| H2H history, recent match history | DB only | Persisted nightly; served by `/matches/headtohead` and `/teams/{id}/recent-matches` with full stats from `fixture_team_stats` |
+| Finished fixture details (events, lineups, player stats) | DB only | Static after match ends; used for ML training and future analytics endpoints |
 | League registry, betting tickets | DB only | User data — must be permanent |
 
 ### Redis
@@ -92,10 +90,6 @@ All times are `America/Mexico_City`. Jobs that depend on previous output are gro
 | Key pattern | TTL | Owner |
 |---|---|---|
 | `matches:date:{YYYY-MM-DD}` | 5 days | `MatchService` |
-| `h2h:teams:{id1}&{id2}` | 10 days | `H2HService` |
-| `team_recent_matches:{team_id}` | 24 h | `routes/teams.py` |
-| `fixture_stats:{fixture_id}` | 30 days | `routes/teams.py` (serves recent-matches endpoint) |
-| `ml_recent_matches:{team_id}` | 24 h | `routes/ml.py` (fallback when prewarm cache is absent) |
 | `odds:{fixture_id}` | 12 h | `OddsService` |
 
 Match data is **never written to the database** — it lives exclusively in Redis.
@@ -109,9 +103,9 @@ PostgreSQL holds all permanent data. Sessions are injected via `Depends(get_db)`
 - `countries` — country reference data
 - `betting_tickets` — user betting history
 
-#### Fixture persistence tables (for ML & sports analytics)
+#### Fixture persistence tables (for ML, sports analytics, and API serving)
 
-Populated nightly by `run_persist_pipeline()` after matches finish. The `fixtures.id` is the API-Sports fixture ID (no autoincrement) — makes every insert idempotent.
+Populated nightly by the persist pipeline. The `fixtures.id` is the API-Sports fixture ID (no autoincrement) — makes every insert idempotent. H2H and recent-match endpoints read directly from these tables.
 
 | Table | Rows per fixture | Purpose |
 |---|---|---|
@@ -121,11 +115,31 @@ Populated nightly by `run_persist_pipeline()` after matches finish. The `fixture
 | `fixture_lineups` | ~22 starters + subs | Formation, starting XI — detect key player absences |
 | `fixture_player_stats` | ~22–26 | Individual ratings, goals, passes, tackles |
 
-**Persist pipeline flow:**
-1. `PrewarmFinishedFixturesWorker` — reads finished fixtures from Redis, fetches missing data from API-Sports, writes to Redis (48 h TTL). `fixture_stats` is skipped if already cached by `routes/teams.py`.
-2. `PersistFinishedFixturesWorker` — reads all 4 Redis keys per fixture, writes to PostgreSQL. Zero API calls. Skips fixtures already in DB.
+**Persist pipeline flow (Phase 2 — tres workers, todos API → BD directo):**
 
-**API cost:** ~60-80 extra calls/day with ~20 finished fixtures. Well within the 7,500/day plan limit.
+Cada worker checa `db.query(Fixture).filter(Fixture.id == fixture_id).first()` antes de hacer cualquier llamada de detalle — si el fixture ya está en BD, se salta por completo.
+
+| Worker | Llamadas de lista | Llamadas de detalle | Total por fixture |
+|---|---|---|---|
+| `persist_recent_matches` | 1 por equipo | 4 por fixture nuevo | 4 |
+| `persist_h2h_fixtures` | 1 por par de equipos | 4 por fixture nuevo | 4 |
+| `persist_finished_fixtures` | 0 (ya tiene la lista del schedule) | 4 por fixture nuevo | 4 |
+
+**Costo aproximado asumiendo ~20 partidos/día y ~40 equipos únicos:**
+
+*Noche 1 (BD vacía):*
+- `persist_recent_matches`: 40 llamadas de lista + 40 equipos × 5 fixtures × 4 detalles = **840 calls**
+- `persist_h2h_fixtures`: 20 llamadas de lista + 20 pares × 10 fixtures × 4 detalles = **820 calls**
+- `persist_finished_fixtures`: 20 fixtures × 4 detalles = **80 calls**
+- **Total noche 1: ~1,740 calls**
+
+*Noches siguientes (BD ya poblada):*
+- `persist_recent_matches`: 40 llamadas de lista + solo fixtures nuevos (~1 por equipo) × 4 = **200 calls**
+- `persist_h2h_fixtures`: 20 llamadas de lista + solo el nuevo H2H por par × 4 = **100 calls**
+- `persist_finished_fixtures`: 20 fixtures × 4 = **80 calls**
+- **Total noche steady-state: ~380 calls**
+
+El costo se autooptimiza — a medida que la BD se llena, las llamadas de detalle se eliminan. Solo se pagan listas (inevitables) + fixtures genuinamente nuevos. Con un límite de 7,500 calls/día, el pipeline nocturno ocupa ~5% del cupo en estado estable.
 
 ## Development rules
 
@@ -143,21 +157,34 @@ Populated nightly by `run_persist_pipeline()` after matches finish. The `fixture
 
 ### Feature: Historical fixture backfill worker
 
-Un worker que recorre temporadas anteriores hacia atrás y persiste fixtures históricos para enriquecer el dataset de entrenamiento del modelo ML.
+Worker on-demand que persiste fixtures históricos hacia atrás para alimentar el dataset de entrenamiento de `ml/predict_tomorrow.py`. El modelo necesita ~500-1,000 partidos para producir predicciones con señal real; sin este worker solo tiene los partidos que el pipeline nocturno ha acumulado desde que arrancó.
 
-**Comportamiento clave — API-aware:**
-Antes de cada ejecución, el worker debe consultar el uso actual de la API (`GET /status` en API-Sports devuelve llamadas usadas/disponibles del día) y calcular cuántos fixtures puede procesar sin exceder el límite diario. Con 7,500 llamadas/día y ~1,500 de consumo base, hay ~6,000 disponibles. A 3 llamadas por fixture (events + lineups + player_stats), puede procesar ~2,000 fixtures por día si no hay otros jobs corriendo — en la práctica dejar un margen y procesar ~50-100 fixtures por ejecución.
+**Input:** una fecha (`YYYY-MM-DD`). El worker procesa todos los partidos terminados de ese día y los persiste en la BD. Para cubrir semanas o meses se llama múltiples veces, un día a la vez, yendo hacia atrás.
 
-**Diseño sugerido:**
-- Nuevo endpoint `GET /status/usage` ya existe — usarlo para calcular el presupuesto disponible antes de iniciar.
-- El worker recibe una `league_id` y una `season` como parámetros.
-- Llama a `GET /fixtures?league={id}&season={year}` para obtener todos los fixture IDs de esa temporada.
-- Filtra los que ya existen en `fixtures` (idempotente).
-- Procesa hasta N fixtures según el presupuesto de API disponible, guarda el progreso (último fixture procesado) para reanudar en la siguiente ejecución.
-- Misma lógica que `prewarm_finished_fixtures` + `persist_finished_fixtures` pero sin depender de Redis de matches del día.
-- Correr manualmente vía endpoint dev-tools, no como cron automático.
+**Flujo por ejecución:**
+1. Consultar presupuesto de API disponible (`SportsAPIClient.get_api_status()` → `requests_remaining`). Calcular cuántos fixtures puede procesar: `budget = (remaining - SAFETY_MARGIN) // CALLS_PER_FIXTURE`.
+2. Llamar `GET /fixtures?date={date}` → lista de fixtures del día.
+3. Filtrar los que ya existen en la tabla `fixtures` (idempotente — re-ejecutar el mismo día no hace nada).
+4. Tomar los primeros `min(pendientes, budget)` fixtures.
+5. Por cada fixture: fetch statistics + events + lineups + player_stats (3 llamadas, `time.sleep(0.6)` entre cada una). Persistir con la misma lógica de `PersistFinishedFixturesWorker._build_*`.
+6. Retornar un resumen: `{date, persisted, skipped, api_calls_used, budget_remaining}`.
 
-**Advertencia:** statistics (`/fixtures/statistics`) puede no estar disponible para partidos muy antiguos dependiendo del plan y la liga.
+**Constantes clave:**
+```python
+CALLS_PER_FIXTURE = 3   # statistics + events + lineups (player_stats opcional)
+SAFETY_MARGIN     = 500 # llamadas reservadas para el pipeline nocturno normal
+```
+
+**Cálculo de capacidad:** Con 7,500 llamadas/día y ~380 de consumo base del pipeline en estado estable, quedan ~7,100 disponibles. A 3 llamadas/fixture: ~1,800 fixtures/día máximo. Un día promedio tiene 15-30 partidos → el worker puede procesar ~60-180 días de historial por día de quota disponible. En la práctica, correr 1-2 veces al día procesando fechas distintas cada vez.
+
+**Trigger:** endpoint dev-tools `POST /dev-tools/backfill?date=YYYY-MM-DD`. Localhost-only igual que los demás dev-tools. No hay cron — se llama manualmente cuando hay quota disponible.
+
+**Progreso:** No guarda estado interno. La idempotencia viene de la BD (`fixtures.id` es el API-Sports fixture ID). Para recorrer semanas completas, llamar el endpoint con fechas consecutivas hacia atrás. Sugerencia: un script local que itere fechas y llame el endpoint en loop, parando si `budget_remaining < CALLS_PER_FIXTURE`.
+
+**Advertencias:**
+- `fixture_team_stats.expected_goals` puede ser `NULL` para partidos antiguos — el modelo lo maneja con impute.
+- Algunas ligas menores no tienen statistics disponibles en API-Sports — persistir el fixture igual, los stats quedan vacíos.
+- No incluir partidos con status distinto a `FT`, `AET`, `PEN` — misma constante `FINISHED_STATUSES` que el pipeline nocturno.
 
 ### Feature: Data retention worker
 
