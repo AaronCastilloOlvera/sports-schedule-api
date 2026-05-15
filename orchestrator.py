@@ -54,7 +54,7 @@ async def main():
 
     scheduler.add_job(
         run_nightly_pipeline,
-        CronTrigger(hour=0, minute=15, timezone='America/Mexico_City'),
+        CronTrigger(hour=2, minute=20, timezone='America/Mexico_City'),
         id='nightly_pipeline',
         name='Nightly Pipeline',
         replace_existing=True
