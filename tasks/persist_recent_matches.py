@@ -15,7 +15,7 @@ from models.fixture import Fixture
 load_dotenv()
 
 FINISHED_STATUSES = {"FT", "AET", "PEN"}
-days_to_prewarm = int(os.getenv("DAYS_TO_PREWARM", 5))
+days_for_recent = int(os.getenv("RECENT_MATCHES_DAYS", 2))
 
 
 class PersistRecentMatchesWorker:
@@ -36,7 +36,7 @@ class PersistRecentMatchesWorker:
             today = datetime.now(timezone.utc)
 
             team_ids = set()
-            for i in range(days_to_prewarm):
+            for i in range(days_for_recent):
                 target_date = (today + timedelta(days=i)).strftime("%Y-%m-%d")
                 matches = match_service.get_matches_by_date(target_date)
                 for match in matches.get("data", []):

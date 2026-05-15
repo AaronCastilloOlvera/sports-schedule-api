@@ -18,6 +18,8 @@ logger = logging.getLogger('Orchestrator')
 
 load_dotenv()
 minutes_interval = int(os.getenv("WORKER_INTERVAL_MINUTES", 5))
+pipeline_hour = int(os.getenv("PIPELINE_HOUR", 0))
+pipeline_minute = int(os.getenv("PIPELINE_MINUTE", 15))
 
 prewarm_worker = PrewarmCacheWorker()
 odds_worker = PrewarmOddsWorker()
@@ -54,7 +56,7 @@ async def main():
 
     scheduler.add_job(
         run_nightly_pipeline,
-        CronTrigger(hour=2, minute=20, timezone='America/Mexico_City'),
+        CronTrigger(hour=pipeline_hour, minute=pipeline_minute, timezone='America/Mexico_City'),
         id='nightly_pipeline',
         name='Nightly Pipeline',
         replace_existing=True
