@@ -15,7 +15,7 @@ from models.fixture import Fixture
 load_dotenv()
 
 FINISHED_STATUSES = {"FT", "AET", "PEN"}
-days_to_prewarm = int(os.getenv("DAYS_TO_PREWARM", 5))
+days_for_h2h = int(os.getenv("H2H_DAYS", 2))
 
 
 class PersistH2HFixturesWorker:
@@ -39,7 +39,7 @@ class PersistH2HFixturesWorker:
             saved = 0
             skipped = 0
 
-            for i in range(days_to_prewarm):
+            for i in range(days_for_h2h):
                 target_date = (today + timedelta(days=i)).strftime("%Y-%m-%d")
                 matches = match_service.get_matches_by_date(target_date)
 
