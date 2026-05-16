@@ -141,6 +141,32 @@ Cada worker checa `db.query(Fixture).filter(Fixture.id == fixture_id).first()` a
 
 El costo se autooptimiza — a medida que la BD se llena, las llamadas de detalle se eliminan. Solo se pagan listas (inevitables) + fixtures genuinamente nuevos. Con un límite de 7,500 calls/día, el pipeline nocturno ocupa ~5% del cupo en estado estable.
 
+## Environment variables
+
+| Variable | Default | Owner | Description |
+|---|---|---|---|
+| `DATABASE_URL` | — | DB | PostgreSQL connection string (required) |
+| `REDIS_URL` | — | Redis | Full Redis URL; if absent, falls back to host/port/db below |
+| `REDIS_HOST` | `localhost` | Redis | Redis host (used when `REDIS_URL` is not set) |
+| `REDIS_PORT` | `6379` | Redis | Redis port |
+| `REDIS_DB` | `0` | Redis | Redis logical DB index |
+| `API_URL` | — | API-Sports | RapidAPI host for API-Sports (e.g. `v3.football.api-sports.io`) |
+| `API_KEY` | — | API-Sports | RapidAPI key |
+| `TELEGRAM_BOT_TOKEN` | — | Notifications | Telegram bot token for pipeline status messages |
+| `TELEGRAM_CHAT_ID` | — | Notifications | Telegram chat/channel ID to receive messages |
+| `GENAI_API_KEY` | — | Bets route | Google Gemini API key used by `/bets` AI analysis |
+| `ALLOWED_ORIGINS` | `""` | CORS | Comma-separated list of allowed CORS origins |
+| `APP_ENV` | — | Dev tools | Set to `localhost` to enable dev-tools endpoints |
+| `PIPELINE_HOUR` | `0` | Orchestrator | Hour (MX time) when the nightly pipeline cron fires |
+| `PIPELINE_MINUTE` | `15` | Orchestrator | Minute when the nightly pipeline cron fires |
+| `WORKER_INTERVAL_MINUTES` | `5` | Orchestrator | How often `run_live_update` runs |
+| `DAYS_TO_PREWARM` | `5` | `prewarm_h2h` | Days ahead to fetch and cache match schedules |
+| `RECENT_MATCHES_DAYS` | `2` | `persist_recent_matches` | Days ahead to collect team IDs for last-5 recent matches |
+| `H2H_DAYS` | `2` | `persist_h2h_fixtures` | Days ahead to collect team pairs for H2H history |
+| `PG_DUMP_PATH` | — | Dev tools | Path to `pg_dump` binary (localhost DB sync only) |
+| `PSQL_PATH` | — | Dev tools | Path to `psql` binary (localhost DB sync only) |
+| `RAILWAY_DB_URL` | — | Dev tools | Source DB URL for localhost DB sync |
+
 ## Development rules
 
 **Rate limiting** — place `time.sleep(0.6)` before every sequential, uncached call to API-Sports. Cached responses never trigger a sleep.
