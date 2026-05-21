@@ -97,9 +97,9 @@ class PersistRecentMatchesWorker:
                 time.sleep(0.6)
 
             self.notification_service.send_message(
-                f"✅ Task Executed: Recent Matches Persisted ({saved} saved, {skipped} skipped)"
+                f"✅ Task Executed: Recent Matches Persisted ({saved} saved, {skipped} already in db)"
             )
-            print(f"PERSIST RECENT ✅ Done. {saved} saved, {skipped} skipped.")
+            print(f"PERSIST RECENT ✅ Done. {saved} saved, {skipped} already in db.")
 
         except Exception as e:
             print(f"PERSIST RECENT 🚨 Error: {e}")

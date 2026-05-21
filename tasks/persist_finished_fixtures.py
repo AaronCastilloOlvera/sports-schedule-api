@@ -78,9 +78,9 @@ class PersistFinishedFixturesWorker:
                     print(f"  -> ⚠️ Failed to persist fixture {fixture_id}: {e}")
 
             self.notification_service.send_message(
-                f"✅ Task Executed: Finished Fixtures Persisted ({saved} saved, {skipped} skipped)"
+                f"✅ Task Executed: Finished Fixtures Persisted ({saved} saved, {skipped} already in db)"
             )
-            print(f"PERSIST FINISHED ✅ Done. {saved} saved, {skipped} skipped.")
+            print(f"PERSIST FINISHED ✅ Done. {saved} saved, {skipped} already in db.")
 
         except Exception as e:
             print(f"PERSIST FINISHED 🚨 Error: {e}")

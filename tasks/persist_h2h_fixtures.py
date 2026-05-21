@@ -58,9 +58,9 @@ class PersistH2HFixturesWorker:
                     time.sleep(0.5)
 
             self.notification_service.send_message(
-                f"✅ Task Executed: H2H Fixtures Persisted ({saved} saved, {skipped} skipped)"
+                f"✅ Task Executed: H2H Fixtures Persisted ({saved} saved, {skipped} already in db)"
             )
-            print(f"PERSIST H2H ✅ Done. {saved} saved, {skipped} skipped.")
+            print(f"PERSIST H2H ✅ Done. {saved} saved, {skipped} already in db.")
 
         except Exception as e:
             print(f"PERSIST H2H 🚨 Error: {e}")
