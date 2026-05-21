@@ -9,6 +9,7 @@ from services.match_service import MatchService
 from services.notification_service import NotificationService
 from services.sports_api_client import SportsAPIClient
 from tasks.fixture_builders import FixtureBuilder
+from tasks.filters import is_youth_match
 from utils.database import SessionLocal
 from models.fixture import Fixture
 
@@ -53,6 +54,7 @@ class PersistRecentMatchesWorker:
                 finished = [
                     f for f in fixtures
                     if f.get("fixture", {}).get("status", {}).get("short") in FINISHED_STATUSES
+                    and not is_youth_match(f)
                 ]
 
                 for match in finished:
