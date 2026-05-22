@@ -73,6 +73,7 @@ class PersistFinishedFixturesWorker:
                         for row in self.builder.build_player_stats(fixture_id, raw_player_stats):
                             db.add(row)
                     db.commit()
+                    db.expunge_all()
                     saved += 1
                     print(f"  -> Persisted fixture {fixture_id}")
                 except Exception as e:

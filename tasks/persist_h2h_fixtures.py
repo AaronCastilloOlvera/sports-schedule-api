@@ -112,6 +112,7 @@ class PersistH2HFixturesWorker:
                     for row in self.builder.build_player_stats(fixture_id, raw_player_stats):
                         db.add(row)
                 db.commit()
+                db.expunge_all()
                 saved += 1
                 print(f"  -> Persisted H2H fixture {fixture_id}")
             except Exception as e:
