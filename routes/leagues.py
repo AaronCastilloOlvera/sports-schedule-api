@@ -124,15 +124,22 @@ def save_league_to_db(db: Session, api_response: list):
             db.add(db_country)
             db.flush() 
 
-        db_league = models.League(
-            id=league_data.get("id"),
-            name=league_data.get("name"),
-            type=league_data.get("type"),
-            logo=league_data.get("logo"),
-            country_id=db_country.id, 
-            is_favorite=False
-        )
-        db.merge(db_league)
+        existing_league = db.query(models.League).filter(models.League.id == league_data.get("id")).first()
+        if existing_league:
+            existing_league.name = league_data.get("name")
+            existing_league.type = league_data.get("type")
+            existing_league.logo = league_data.get("logo")
+            existing_league.country_id = db_country.id
+        else:
+            db_league = models.League(
+                id=league_data.get("id"),
+                name=league_data.get("name"),
+                type=league_data.get("type"),
+                logo=league_data.get("logo"),
+                country_id=db_country.id,
+                is_favorite=False
+            )
+            db.add(db_league)
 
     db.commit()
     return len(api_response)
