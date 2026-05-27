@@ -2,6 +2,7 @@ import json
 from sqlalchemy.orm import Session
 from utils.redis_client import get_redis_connection
 from services.sports_api_client import SportsAPIClient
+from tasks.filters import is_youth_match
 import models
 
 class MatchService:
@@ -31,6 +32,7 @@ class MatchService:
       filtered_matches = [
           m for m in all_matches
           if m.get("league", {}).get("id") in favorite_ids
+          and not is_youth_match(m)
       ]
 
       if self.r:

@@ -119,6 +119,8 @@ Populated nightly by the persist pipeline. The `fixtures.id` is the API-Sports f
 
 Cada worker checa `db.query(Fixture).filter(Fixture.id == fixture_id).first()` antes de hacer cualquier llamada de detalle — si el fixture ya está en BD, se salta por completo.
 
+**Filtro de partidos juveniles** — los tres workers aplican `is_youth_match()` de `tasks/filters.py` antes de procesar. Solo filtra la liga Friendlies (ID 10) cuando algún equipo contiene patrón de categoría juvenil (U17, U21, Under-21, etc.). Otras ligas no se filtran.
+
 | Worker | Llamadas de lista | Llamadas de detalle | Total por fixture |
 |---|---|---|---|
 | `persist_recent_matches` | 1 por equipo | 4 por fixture nuevo | 4 |
@@ -178,6 +180,8 @@ El costo se autooptimiza — a medida que la BD se llena, las llamadas de detall
 **Odds filtering** — `OddsService` only stores bet365, 1xBet, and Betano bookmakers. Defined in `ALLOWED_BOOKMAKERS` constant in `services/odds_service.py`.
 
 **Alembic** — `migrations/env.py` imports `Base` from `models.base` and imports the `models` package so all models register for autogenerate detection. When adding a new model: create the file, import it in `models/__init__.py`, then run `alembic revision --autogenerate`.
+
+**Memory — persist workers** — call `db.expunge_all()` after every `db.commit()` inside persist loops. SQLAlchemy's identity map holds references to every committed object until the session closes; without this, processing 100+ fixtures accumulates thousands of ORM objects in RAM.
 
 ## Future plans / Next features
 
