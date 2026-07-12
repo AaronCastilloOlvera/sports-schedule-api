@@ -229,6 +229,8 @@ Un job que borra automáticamente fixtures y sus datos relacionados que superen 
 
 ## Possible improvements
 
+### Known (original)
+
 | # | Area | Issue | Fix |
 |---|---|---|---|
 | 1 | **Logging** | `print()` everywhere — no log levels, no structured output | Replace with Python `logging` module; use `INFO`/`WARNING`/`ERROR` levels |
@@ -238,6 +240,51 @@ Un job que borra automáticamente fixtures y sus datos relacionados que superen 
 | 5 | **Orchestrator resilience** | If orchestrator crashes, no automatic restart | Use Railway's restart policy or a process supervisor |
 | 6 | **Migrations** | Alembic runs manually — easy to forget on deploy | Add `alembic upgrade head` as a release command in Railway |
 | 7 | **Tests** | No test suite | At minimum: unit tests for `_build_*` methods in persist worker and service layer |
+
+### Critical — Production outage risk
+
+| # | File | Issue | Fix |
+|---|---|---|---|
+| C1 | `services/match_service.py` | Redis `None` not guarded before `.exists()` / `.setex()` — crashes when Redis is down instead of degrading | Check `if self.r` before every Redis call |
+| C2 | `tasks/persist_*.py` (all 3) | Race condition between "check if fixture exists" read and insert — can produce `IntegrityError` under concurrent runs | Use DB-level upsert (`INSERT ON CONFLICT`) |
+| C3 | `routes/bet_service.py` | File path traversal in image upload — `extension` taken from filename with no validation | Whitelist allowed extensions; reject filenames with path separators |
+| C4 | `tasks/live_matches.py` | After Redis + orchestrator restart, `live_fixture_ids` restored from a potentially stale/empty Redis key | Re-calculate from API on startup instead of relying on persisted state |
+
+### High — Data loss or corruption
+
+| # | File | Issue | Fix |
+|---|---|---|---|
+| H1 | `services/match_service.py` | On force-refresh API failure, empty list overwrites valid cache data | Skip cache update on API failure; keep old data |
+| H2 | `tasks/prewarm_finished_fixtures.py` | Enrichment data (stats, events, lineups) cached to Redis only — Redis loss drops it permanently | Fold into `PersistFinishedFixturesWorker` or write to DB directly |
+| H3 | `services/sports_api_client.py` | All methods swallow API errors and return `[]` — full API outage looks identical to "no matches today" | Raise exceptions; add Telegram alert after N failures |
+| H4 | `orchestrator.py` | No timeout on jobs — if `run_nightly_pipeline()` hangs, next day's job is permanently blocked | Add `timeout=3600` and handle `JobExecutionError` |
+| H5 | `main.py` | `create_all()` on startup never checks if Alembic version matches; schema drift goes undetected | Add startup check comparing alembic version to expected |
+
+### Medium — Degraded service or reliability
+
+| # | File | Issue | Fix |
+|---|---|---|---|
+| M1 | `services/H2HService.py` | N+1 query problem — one `SELECT` per fixture instead of a join | Use `joinedload(Fixture.team_stats)` |
+| M2 | `routes/redis.py` | `r.keys("*")` blocks Redis on large datasets | Replace with `r.scan()` pagination |
+| M3 | `tasks/live_matches.py`, `tasks/prewarm_*.py` | TTL constants redefined in multiple files with different values — keys silently overwrite each other's TTL | Centralize all TTL constants in `utils/constants.py` |
+| M4 | `orchestrator.py` | `PrewarmRecentMatchesWorker` and `PrewarmFinishedFixturesWorker` imported but never scheduled | Decide if they should run nightly; if so, add to pipeline |
+| M5 | `orchestrator.py` | No broad exception handler — non-keyboard exceptions crash the scheduler silently | Add `except Exception` handler; log and exit cleanly |
+| M6 | `utils/database.py` | SQLAlchemy engine uses default pool settings — no size limit or timeout configured | Add `pool_size`, `max_overflow`, `pool_timeout` |
+| M7 | `routes/bets.py` | `genai.Client` initialized at module level — missing env var crashes app on import | Lazy-initialize on first request with clear error message |
+
+### Low — Code quality and maintainability
+
+| # | File | Issue | Fix |
+|---|---|---|---|
+| L1 | `routes/leagues.py:72–74` | Orphaned `from datetime import datetime` + `...` from incomplete refactoring | Remove dead lines |
+| L2 | `tasks/persist_*.py` (all 3) | ~80% code duplication across workers | Extract shared `_persist_fixture()` utility into base class |
+| L3 | `tasks/live_matches.py`, `tasks/persist_*.py` | Magic numbers (`timedelta(hours=3)`, `last=5`, etc.) with no named constants | Move to named constants with explanatory comments |
+| L4 | `tasks/persist_*.py` | Individual `db.add()` + `db.commit()` per fixture instead of bulk insert | Use `bulk_insert_mappings()` for team_stats, events, lineups, player_stats |
+| L5 | `services/notification_service.py` | `send_message()` returns nothing — callers cannot know if notification failed | Return a boolean so callers can retry or escalate |
+| L6 | All tasks | Emoji in `print()` calls are not machine-parseable; blocks structured log monitoring | Use `logging` module with `INFO`/`WARNING`/`ERROR` levels |
+| L7 | All routes | Most endpoints have no `response_model` — Swagger shows `dict` instead of a schema | Add `response_model` to all route decorators |
+| L8 | `services/odds_service.py` | `ALLOWED_BOOKMAKERS` is hardcoded — adding a bookmaker requires a code change | Move to env var or DB config table |
+| L9 | `services/sports_api_client.py` | Never reads `X-RateLimit-*` response headers — quota exhaustion is a surprise | Parse headers; warn when approaching limit |
 
 ---
 
