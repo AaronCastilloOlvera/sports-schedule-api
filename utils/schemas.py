@@ -52,18 +52,18 @@ class LeagueOut(BaseModel):
 class BettingTicketBase(BaseModel):
     ticket_id: str
     sport: str = "Futbol"
-    league: str
-    pick: str
-    odds: float
-    stake: float
-    payout: float
-    net_profit: float
+    league: Optional[str] = None
+    pick: Optional[str] = None
+    odds: Optional[float] = None
+    stake: Optional[float] = None
+    payout: Optional[float] = None
+    net_profit: Optional[float] = None
     status: str = "pending"  # 'pending', 'won', 'lost'
-    match_name: str
+    match_name: Optional[str] = None
     bet_type: Optional[str] = None
     image_path: Optional[str] = None
     match_datetime: datetime
-    device_type: str  # 'movil' or 'desktop'
+    device_type: Optional[str] = None
     studied: bool = False
     comments: str = ""
 
