@@ -174,3 +174,5 @@ cython_debug/
 .pypirc
 
 tickets_images/
+ticket_images/
+ml/
