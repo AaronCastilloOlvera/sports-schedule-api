@@ -70,6 +70,21 @@ class BettingTicketBase(BaseModel):
 class BettingTicketCreate(BettingTicketBase):
     pass
 
+class BankrollTransactionBase(BaseModel):
+    type: str
+    amount: float
+    date: datetime
+    notes: Optional[str] = None
+
+class BankrollTransactionCreate(BankrollTransactionBase):
+    pass
+
+class BankrollTransaction(BankrollTransactionBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
 class BettingTicket(BettingTicketBase):
     id: int
     created_at: datetime

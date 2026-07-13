@@ -1,5 +1,6 @@
 from .base import Base
 from .betting_ticket import BettingTicket
+from .bankroll_transaction import BankrollTransaction
 from .country import Country
 from .league import League
 from .fixture import Fixture
