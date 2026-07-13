@@ -17,12 +17,15 @@ uvicorn main:app --reload
 # Run the background orchestrator (separate process)
 python orchestrator.py
 
+# Run the Telegram ticket bot (separate process, local only)
+python telegram_ticket_bot.py
+
 # Database migrations
 alembic revision --autogenerate -m "description of change"
 alembic upgrade head
 ```
 
-The `Procfile` starts only the web server. The orchestrator must be started as a **separate process** — it is never managed by the FastAPI app.
+The `Procfile` starts only the web server. The orchestrator must be started as a **separate process** — it is never managed by the FastAPI app. The Telegram ticket bot is also a separate local-only process — it is never deployed to Railway.
 
 ## Architecture
 
@@ -168,6 +171,11 @@ El costo se autooptimiza — a medida que la BD se llena, las llamadas de detall
 | `PG_DUMP_PATH` | — | Dev tools | Path to `pg_dump` binary (localhost DB sync only) |
 | `PSQL_PATH` | — | Dev tools | Path to `psql` binary (localhost DB sync only) |
 | `RAILWAY_DB_URL` | — | Dev tools | Source DB URL for localhost DB sync |
+| `TICKET_BOT_TOKEN` | — | Ticket bot | Telegram bot token for the ticket bot (separate from the pipeline bot) |
+| `TICKET_CHAT_ID` | — | Ticket bot | Personal Telegram chat ID — restricts the ticket bot to one user |
+| `OLLAMA_URL` | `http://localhost:11434` | Ticket bot | Ollama base URL for local vision inference |
+| `OLLAMA_MODEL` | `qwen2.5vl:7b` | Ticket bot | Vision model used to extract ticket data from images |
+| `TICKET_IMAGES_DIR` | `ticket_images/` | Ticket bot | Local folder where ticket images are saved |
 
 ## Development rules
 
