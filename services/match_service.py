@@ -67,12 +67,8 @@ class MatchService:
       )
 
       if not fixtures:
-        # No DB data — try existing Redis cache first
-        if self.r:
-          existing = self.r.get(cache_key)
-          if existing:
-            return {"data": json.loads(existing)}
-        # BD and Redis both empty — fall back to API as last resort
+        # No DB data for this date yet — go straight to API so force_refresh
+        # doesn't return the same stale Redis data we're trying to update
         return self._refresh_from_api(target_date, cache_key)
 
       league_ids = {f.league_id for f in fixtures if f.league_id}

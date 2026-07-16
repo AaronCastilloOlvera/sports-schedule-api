@@ -44,6 +44,8 @@ Route → Service → Redis (live/today's schedule, odds)
 
 `routes/dev_tools.py` endpoints are **localhost-only** — they must not be exposed in production. Current endpoints: `POST /dev-tools/sync-db`, `POST /dev-tools/persist-fixtures?date=YYYY-MM-DD`.
 
+`routes/bankroll.py` — CRUD for deposit/withdrawal transactions. Endpoints: `GET /bankroll/transactions`, `POST /bankroll/transactions`, `PUT /bankroll/transactions/{id}`, `DELETE /bankroll/transactions/{id}`. Business logic in `services/bankroll_service.py`. Model in `models/bankroll_transaction.py`.
+
 ### Background job chain
 
 All times are `America/Mexico_City`. Jobs that depend on previous output are grouped into pipelines and run sequentially via `await asyncio.to_thread()`.
@@ -105,6 +107,7 @@ PostgreSQL holds all permanent data. Sessions are injected via `Depends(get_db)`
 - `leagues` — favorite league registry
 - `countries` — country reference data
 - `betting_tickets` — user betting history
+- `bankroll_transactions` — deposit/withdrawal history for bankroll tracking (see `models/bankroll_transaction.py`)
 
 #### Fixture persistence tables (for ML, sports analytics, and API serving)
 
