@@ -73,7 +73,8 @@ Return ONLY the JSON. No markdown, no code blocks, no explanation.
 Rules:
 - odds: always return as a positive decimal number >= 1.0. If the odds shown are American format (e.g. +150 → 2.50, -200 → 1.50, -320 → 1.31), convert them. Never return a negative number or a value less than 1.0 in this field.
 - Remove special characters and extra spaces from text fields.
-- league: NEVER return null if team names are visible. Use your sports knowledge to infer the league from the team names — football, baseball, basketball, tennis, etc. Only return null if the image is completely unreadable.
+- sport: one of exactly "futbol", "basketball", "american_football", "baseball" (lowercase, matches the app's enum — never a display label like "Soccer" or "Baseball"). Infer from the team names/sport shown. Never null.
+- league: the COMPETITION name, not the sport — e.g. "Liga MX", "Premier League", "NBA", "MLB", "LMB". NEVER return the sport itself here (e.g. never "baseball" or "futbol" as the league). Use team names + sport to infer it: for baseball specifically, US teams → "MLB" (Major League Baseball), Mexican teams → "LMB" (Liga Mexicana de Béisbol). NEVER return null if team names are visible — only return null if the image is completely unreadable.
 - pick: for parlays, list each selected team or outcome separated by ' + ' (e.g. "SF Giants + SD Padres"). Never return null if team names are visible.
 - stake: use the total amount wagered shown on the ticket (e.g. "Apuesta total", "Total stake"). Ignore individual leg amounts.
 - odds: use the combined/total odds shown on the ticket (e.g. "Momios" total), not individual leg odds.
@@ -87,6 +88,7 @@ Rules:
 Expected JSON structure:
 {
   "ticket_id": "ID printed on the ticket or null",
+  "sport": "futbol",
   "league": "competition name or null",
   "match_name": "Home Team vs Away Team",
   "bet_type": "bet market (e.g. 1X2, Over/Under 2.5, Parley, CA - 1X2 + BTTS)",
@@ -219,7 +221,7 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
         net_profit=net_profit,
         match_datetime=match_dt or datetime.utcnow(),
         status=data.get("status") or "pending",
-        sport="Futbol",
+        sport=_clean(data.get("sport")) or "futbol",
         device_type=data.get("device_type"),
         studied=data.get("studied") or False,
         comments=data.get("comments") or "",
