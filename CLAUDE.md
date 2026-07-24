@@ -46,6 +46,8 @@ Route → Service → Redis (live/today's schedule, odds)
 
 `routes/bankroll.py` — CRUD for deposit/withdrawal transactions. Endpoints: `GET /bankroll/transactions`, `POST /bankroll/transactions`, `PUT /bankroll/transactions/{id}`, `DELETE /bankroll/transactions/{id}`. Business logic in `services/bankroll_service.py`. Model in `models/bankroll_transaction.py`.
 
+`routes/baseball.py` — Baseball schedule and boxscore endpoints (LMB + MLB). Endpoints: `GET /baseball/schedule?date=YYYY-MM-DD&league=lmb|mlb`, `GET /baseball/boxscore/{game_pk}`. Business logic in `services/baseball_service.py`. Data from `services/mlb_api_client.py` → `statsapi.mlb.com/api/v1` (free, no auth). Redis cache TTL: 2 min. LMB: `sportId=23, leagueId=125`. MLB: `sportId=1`.
+
 ### Background job chain
 
 All times are `America/Mexico_City`. Jobs that depend on previous output are grouped into pipelines and run sequentially via `await asyncio.to_thread()`.
@@ -179,7 +181,6 @@ El costo se autooptimiza — a medida que la BD se llena, las llamadas de detall
 | `OLLAMA_URL` | `http://localhost:11434` | Ticket bot | Ollama base URL for local vision inference |
 | `OLLAMA_MODEL` | `qwen2.5vl:7b` | Ticket bot | Vision model used to extract ticket data from images |
 | `TICKET_IMAGES_DIR` | `ticket_images/` | Ticket bot | Local folder where ticket images are saved |
-
 ## Development rules
 
 **Rate limiting** — place `time.sleep(0.6)` before every sequential, uncached call to API-Sports. Cached responses never trigger a sleep.
