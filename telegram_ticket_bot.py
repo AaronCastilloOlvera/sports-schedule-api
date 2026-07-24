@@ -67,43 +67,51 @@ TICKET_IMAGES_DIR = os.getenv("TICKET_IMAGES_DIR", "ticket_images")
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-EXTRACT_PROMPT = """Analyze this betting ticket image and extract the information as a compact JSON object.
+def _build_prompt() -> str:
+    year = datetime.now().year
+    return f"""Analyze this betting ticket image and extract the information as a compact JSON object.
 Return ONLY the JSON. No markdown, no code blocks, no explanation.
 
+Today's year is {year}. Use this when the year is not visible on the ticket.
+
 Rules:
+- odds: Look for the TOTAL/COMBINED odds on the ticket — usually displayed in the upper-right area of the ticket, often labeled "Momios", "Cuota", "Odds", or "Total odds". It is almost always shown in American format with a + or - sign (e.g. +150, -110, +225, -320). Convert American odds to decimal: positive → 1 + (value/100), negative → 1 + (100/abs(value)). Examples: +150 → 2.50, -200 → 1.50, +225 → 3.25, -320 → 1.31. For parlays, use the combined total odds shown, NOT individual leg odds. IMPORTANT: read the actual number from the image — do not guess, do not use any default value. If you truly cannot read it, return 0.
 - odds: always return as a positive decimal number >= 1.0. If the odds shown are American format (e.g. +150 → 2.50, -200 → 1.50, -320 → 1.31), convert them. Never return a negative number or a value less than 1.0 in this field.
 - Remove special characters and extra spaces from text fields.
 - sport: one of exactly "futbol", "basketball", "american_football", "baseball" (lowercase, matches the app's enum — never a display label like "Soccer" or "Baseball"). Infer from the team names/sport shown. Never null.
-- league: the COMPETITION name, not the sport — e.g. "Liga MX", "Premier League", "NBA", "MLB", "LMB". NEVER return the sport itself here (e.g. never "baseball" or "futbol" as the league). Use team names + sport to infer it: for baseball specifically, US teams → "MLB" (Major League Baseball), Mexican teams → "LMB" (Liga Mexicana de Béisbol). NEVER return null if team names are visible — only return null if the image is completely unreadable.
+- league: the COMPETITION name, not the sport — e.g. "Liga MX", "Premier League", "NBA", "MLB", "LMB". NEVER return the sport itself here (e.g. never "baseball" or "futbol" as the league). Use team names + sport to infer it: for baseball specifically, US teams → "MLB" (Major League Baseball), Mexican teams → "LMB" (Liga Mexicana de Béisbol). NEVER return null if team names are visible — only return null if the image is completely unreadable. Formatting rule: the leagues NFL, MLS, NBA, MLB and LMB must always be written in ALL CAPS exactly as shown. All other leagues must be written in PascalCase (e.g. "Premier League", "Liga Mx", "Champions League", "Bundesliga").
 - pick: for parlays, list each selected team or outcome separated by ' + ' (e.g. "SF Giants + SD Padres"). Never return null if team names are visible.
 - stake: use the total amount wagered shown on the ticket (e.g. "Apuesta total", "Total stake"). Ignore individual leg amounts.
-- odds: use the combined/total odds shown on the ticket (e.g. "Momios" total), not individual leg odds.
-- status: use 'pending' if no result is shown, 'won' if the ticket won, 'lost' if it lost.
+- Remove special characters and extra spaces from text fields.
 - If the description contains 'incl. Prorroga', remove it.
-- bet_type: prefix with 'CA - ' ONLY if it is a 'crear apuesta': one single match where the user combined 2 or more different markets (e.g. "Team A wins AND over 2.5 goals"). A single selection on one match is NOT a CA. Prefix with 'Parley' if it is a parlay (2 or more different matches combined).
+- league: NEVER return null if team names are visible. Use your sports knowledge to infer the league. MLB teams include: Yankees, Red Sox, Dodgers, Giants, Padres, Cubs, Mets, Braves, Astros, Rangers, Rockies, Blue Jays, Cardinals, Phillies — if you see any of these, league is 'MLB'. Only return null if the image is completely unreadable.
+- pick: the selected outcome (e.g. 'Home', 'Over 2.5', 'Yes', 'Team A'). For parlays, list each pick separated by ' + ' (e.g. "SF Giants + SD Padres").
 - match_name: use 'Home Team vs Away Team' format. For parlays, list all matches separated by ' | '.
-- device_type: 'movil' if the ticket looks like a mobile screenshot, 'desktop' if it looks like a desktop/web screenshot.
-- pick: the selected outcome (e.g. 'Home', 'Over 2.5', 'Yes', 'Team A').
+- match_datetime: YYYY-MM-DDTHH:MM:SS — if the year is not visible, use {year}.
+- status: must be one of: 'pending', 'won', 'lost', 'push'. Use 'pending' if no result is shown.
+- sport: must be one of: 'futbol', 'basketball', 'american_football', 'baseball'. Infer from the teams and league. Return null if uncertain.
+- bet_type: must be one of: 'simple', 'parlay', 'teaser', 'derecha', 'crear_apuesta'. Use 'parlay' for 2+ different matches combined. Use 'crear_apuesta' for 2+ selections on the SAME match. Use 'simple' for a single selection. Return null if uncertain.
+- device_type: must be one of: 'mobile', 'desktop'. Infer from the layout of the ticket screenshot.
 
 Expected JSON structure:
-{
+{{
   "ticket_id": "ID printed on the ticket or null",
   "sport": "futbol",
   "league": "competition name or null",
   "match_name": "Home Team vs Away Team",
-  "bet_type": "bet market (e.g. 1X2, Over/Under 2.5, Parley, CA - 1X2 + BTTS)",
+  "bet_type": "simple",
   "pick": "selected outcome",
-  "odds": 1.85,
+  "odds": 2.10,
   "stake": 100.0,
   "payout": 185.0,
-  "match_datetime": "YYYY-MM-DDTHH:MM:SS or null — if the year is not visible on the ticket, assume the current year",
+  "match_datetime": "YYYY-MM-DDTHH:MM:SS or null",
   "status": "pending",
-  "device_type": "movil",
+  "device_type": "mobile",
   "studied": false,
   "comments": ""
-}
+}}
 
-Set any field to null if it cannot be read from the image."""
+Set any field to null if it cannot be determined from the image."""
 
 
 # ---------------------------------------------------------------------------
@@ -139,7 +147,7 @@ def extract_ticket_data(image_bytes: bytes) -> dict:
 
     payload = {
         "model": OLLAMA_MODEL,
-        "messages": [{"role": "user", "content": EXTRACT_PROMPT, "images": [image_b64]}],
+        "messages": [{"role": "user", "content": _build_prompt(), "images": [image_b64]}],
         "stream": False,
     }
 
@@ -209,13 +217,18 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
     payout = data.get("payout")
     net_profit = round(payout - stake, 2) if (payout is not None and stake is not None) else None
 
+    raw_odds = data.get("odds")
+    odds = _to_decimal_odds(raw_odds)
+    if (not odds or odds == 0) and stake and payout and stake > 0:
+        odds = round(payout / stake, 2)
+
     ticket = BettingTicket(
         ticket_id=ticket_id,
         league=_clean(data.get("league")),
         match_name=_clean(data.get("match_name")),
         bet_type=_clean(data.get("bet_type")),
         pick=_clean(data.get("pick")),
-        odds=_to_decimal_odds(data.get("odds")),
+        odds=odds,
         stake=stake,
         payout=payout,
         net_profit=net_profit,
