@@ -1,4 +1,5 @@
 import requests
+from datetime import datetime
 
 _BASE = "https://statsapi.mlb.com/api/v1"
 _HEADERS = {"User-Agent": "Mozilla/5.0"}
@@ -19,7 +20,8 @@ class MLBApiClient:
         params = {
             "sportId": cfg["sportId"],
             "date": date,
-            "hydrate": "team,linescore,probablePitcher",
+            # team(leagueRecord) → win/loss record shown next to each team name
+            "hydrate": "team(leagueRecord),linescore,probablePitcher",
         }
         if cfg["leagueId"]:
             params["leagueId"] = cfg["leagueId"]
@@ -40,3 +42,61 @@ class MLBApiClient:
         except requests.RequestException as e:
             print(f"[MLB CLIENT] boxscore error (gamePk={game_pk}): {e}")
             return {}
+
+    def get_person_stats(self, person_id: int, league: str = "lmb", season: int | None = None) -> dict:
+        # sportId matters here — LMB stats are invisible without it (defaults to
+        # MLB-only otherwise, returning an empty split for LMB-only players).
+        cfg = LEAGUES.get(league, LEAGUES["lmb"])
+        params = {
+            "stats": "season",
+            "group": "pitching",
+            "sportId": cfg["sportId"],
+            "season": season or datetime.now().year,
+        }
+        stat = {}
+        try:
+            r = requests.get(f"{self.base}/people/{person_id}/stats", headers=self.headers, params=params, timeout=10)
+            r.raise_for_status()
+            stats_list = r.json().get("stats", [])
+            splits = stats_list[0].get("splits", []) if stats_list else []
+            stat = splits[0]["stat"] if splits else {}
+        except requests.RequestException as e:
+            print(f"[MLB CLIENT] pitcher stats error (id={person_id}): {e}")
+
+        # Merge in pitchHand (RHP/LHP) — doesn't change, but there's no combined
+        # endpoint, so fold it into this same cached response instead of a
+        # second round-trip from the frontend.
+        try:
+            r = requests.get(f"{self.base}/people/{person_id}", headers=self.headers, timeout=10)
+            r.raise_for_status()
+            people = r.json().get("people", [])
+            stat["pitchHand"] = people[0].get("pitchHand") if people else None
+        except requests.RequestException as e:
+            print(f"[MLB CLIENT] person bio error (id={person_id}): {e}")
+
+        return stat
+
+    def get_person_game_log(self, person_id: int, league: str = "lmb", seasons: list[int] | None = None) -> list:
+        # Same sportId semantics as get_person_stats — one row per start, each
+        # carrying its own `opponent` team so the caller can filter by matchup.
+        # gameLog is inherently single-season on this API (no "career" mode),
+        # so multi-season history means one call per year, concatenated here.
+        cfg = LEAGUES.get(league, LEAGUES["lmb"])
+        years = seasons or [datetime.now().year]
+        all_splits = []
+        for year in years:
+            params = {
+                "stats": "gameLog",
+                "group": "pitching",
+                "sportId": cfg["sportId"],
+                "season": year,
+            }
+            try:
+                r = requests.get(f"{self.base}/people/{person_id}/stats", headers=self.headers, params=params, timeout=10)
+                r.raise_for_status()
+                stats_list = r.json().get("stats", [])
+                splits = stats_list[0].get("splits", []) if stats_list else []
+                all_splits.extend(splits)
+            except requests.RequestException as e:
+                print(f"[MLB CLIENT] game log error (id={person_id}, season={year}): {e}")
+        return all_splits

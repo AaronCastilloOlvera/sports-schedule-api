@@ -214,8 +214,14 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
             pass
 
     stake = data.get("stake")
-    payout = data.get("payout")
-    net_profit = round(payout - stake, 2) if (payout is not None and stake is not None) else None
+    status = data.get("status") or "pending"
+
+    if status == "lost" and stake is not None:
+        payout = 0.0
+        net_profit = round(-stake, 2)
+    else:
+        payout = data.get("payout")
+        net_profit = round(payout - stake, 2) if (payout is not None and stake is not None) else None
 
     raw_odds = data.get("odds")
     odds = _to_decimal_odds(raw_odds)
@@ -233,7 +239,7 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
         payout=payout,
         net_profit=net_profit,
         match_datetime=match_dt or datetime.utcnow(),
-        status=data.get("status") or "pending",
+        status=status,
         sport=_clean(data.get("sport")) or "futbol",
         device_type=data.get("device_type"),
         studied=data.get("studied") or False,
