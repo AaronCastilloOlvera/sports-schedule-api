@@ -34,3 +34,11 @@ def get_pitcher_gamelog(
     seasons: int = Query(5, description="How many seasons back to include (this year + seasons-1 prior)"),
 ):
     return BaseballService().get_pitcher_game_log(person_id, league, seasons)
+
+
+@router.get("/games-scores")
+def get_games_final_scores(
+    game_pks: str = Query(..., description="Comma-separated MLB Stats API gamePks"),
+):
+    pks = [int(pk) for pk in game_pks.split(",") if pk]
+    return BaseballService().get_games_final_scores(pks)
