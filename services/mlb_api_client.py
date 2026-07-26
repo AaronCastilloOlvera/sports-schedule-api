@@ -102,10 +102,13 @@ class MLBApiClient:
         return all_splits
 
     def get_game_final_score(self, game_pk: int) -> dict | None:
-        # gameLog splits carry the pitcher's own stats but never the team's
-        # final score — /schedule keyed by a single gamePk does.
         try:
-            r = requests.get(f"{self.base}/schedule", headers=self.headers, params={"gamePk": game_pk}, timeout=10)
+            r = requests.get(
+                f"{self.base}/schedule",
+                headers=self.headers,
+                params={"gamePk": game_pk, "hydrate": "linescore"},
+                timeout=10,
+            )
             r.raise_for_status()
             dates = r.json().get("dates", [])
             games = dates[0]["games"] if dates else []
@@ -113,11 +116,15 @@ class MLBApiClient:
             if not game:
                 return None
             teams = game.get("teams", {})
+            innings = game.get("linescore", {}).get("innings", [])
+            first_inning = innings[0] if innings else {}
             return {
                 "home": teams.get("home", {}).get("score"),
                 "away": teams.get("away", {}).get("score"),
                 "homeTeamId": teams.get("home", {}).get("team", {}).get("id"),
                 "awayTeamId": teams.get("away", {}).get("team", {}).get("id"),
+                "firstInningHome": first_inning.get("home", {}).get("runs"),
+                "firstInningAway": first_inning.get("away", {}).get("runs"),
             }
         except requests.RequestException as e:
             print(f"[MLB CLIENT] final score error (gamePk={game_pk}): {e}")
