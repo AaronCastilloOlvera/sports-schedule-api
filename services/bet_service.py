@@ -11,7 +11,7 @@ class BetService:
 
   def get_tickets(self):
     return self.db.query(models.BettingTicket).order_by(models.BettingTicket.ticket_id.desc()).all()
-  
+
   def get_ticket_by_id(self, ticket_id: str):
     return self.db.query(models.BettingTicket).filter(models.BettingTicket.ticket_id == ticket_id).first()
 

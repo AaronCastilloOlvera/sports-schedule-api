@@ -7,6 +7,7 @@ SCHEDULE_TTL = 120     # 2 min — live scores change frequently
 BOXSCORE_TTL = 120     # 2 min while live; completed games rarely re-fetched
 PITCHER_STATS_TTL = 21600  # 6h — season stats only move after a start ends
 GAME_LOG_TTL = 21600       # 6h — same cadence, one new row appears every ~5 days
+FINAL_SCORE_TTL = 604800  # 7d — a completed game's score never changes
 
 
 class BaseballService:
@@ -67,3 +68,19 @@ class BaseballService:
         if self.r and log:
             self.r.setex(cache_key, GAME_LOG_TTL, json.dumps(log))
         return {"data": log}
+
+    def get_games_final_scores(self, game_pks: list[int]) -> dict:
+        scores = {}
+        for game_pk in game_pks:
+            cache_key = f"baseball:final-score:{game_pk}"
+            cached = self.r.get(cache_key) if self.r else None
+            if cached:
+                scores[game_pk] = json.loads(cached)
+                continue
+
+            score = self.client.get_game_final_score(game_pk)
+            if score:
+                scores[game_pk] = score
+                if self.r:
+                    self.r.setex(cache_key, FINAL_SCORE_TTL, json.dumps(score))
+        return scores

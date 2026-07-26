@@ -75,8 +75,7 @@ Return ONLY the JSON. No markdown, no code blocks, no explanation.
 Today's year is {year}. Use this when the year is not visible on the ticket.
 
 Rules:
-- odds: Look for the TOTAL/COMBINED odds on the ticket — usually displayed in the upper-right area of the ticket, often labeled "Momios", "Cuota", "Odds", or "Total odds". It is almost always shown in American format with a + or - sign (e.g. +150, -110, +225, -320). Convert American odds to decimal: positive → 1 + (value/100), negative → 1 + (100/abs(value)). Examples: +150 → 2.50, -200 → 1.50, +225 → 3.25, -320 → 1.31. For parlays, use the combined total odds shown, NOT individual leg odds. IMPORTANT: read the actual number from the image — do not guess, do not use any default value. If you truly cannot read it, return 0.
-- odds: always return as a positive decimal number >= 1.0. If the odds shown are American format (e.g. +150 → 2.50, -200 → 1.50, -320 → 1.31), convert them. Never return a negative number or a value less than 1.0 in this field.
+- odds: Look for the TOTAL/COMBINED odds on the ticket — usually labeled "Momios", "Cuota", "Odds", or "Total odds". Return the number EXACTLY as it appears on the ticket — do NOT convert. If the ticket shows "+150", return 150. If it shows "-320", return -320. If it shows "2.10", return 2.10. For parlays, use the combined total odds, NOT individual leg odds. If you truly cannot read it, return 0.
 - Remove special characters and extra spaces from text fields.
 - sport: one of exactly "futbol", "basketball", "american_football", "baseball" (lowercase, matches the app's enum — never a display label like "Soccer" or "Baseball"). Infer from the team names/sport shown. Never null.
 - league: the COMPETITION name, not the sport — e.g. "Liga MX", "Premier League", "NBA", "MLB", "LMB". NEVER return the sport itself here (e.g. never "baseball" or "futbol" as the league). Use team names + sport to infer it: for baseball specifically, US teams → "MLB" (Major League Baseball), Mexican teams → "LMB" (Liga Mexicana de Béisbol). NEVER return null if team names are visible — only return null if the image is completely unreadable. Formatting rule: the leagues NFL, MLS, NBA, MLB and LMB must always be written in ALL CAPS exactly as shown. All other leagues must be written in PascalCase (e.g. "Premier League", "Liga Mx", "Champions League", "Bundesliga").
@@ -90,7 +89,7 @@ Rules:
 - match_datetime: YYYY-MM-DDTHH:MM:SS — if the year is not visible, use {year}.
 - status: must be one of: 'pending', 'won', 'lost', 'push'. Use 'pending' if no result is shown.
 - sport: must be one of: 'futbol', 'basketball', 'american_football', 'baseball'. Infer from the teams and league. Return null if uncertain.
-- bet_type: must be one of: 'simple', 'parlay', 'teaser', 'derecha', 'crear_apuesta'. Use 'parlay' for 2+ different matches combined. Use 'crear_apuesta' for 2+ selections on the SAME match. Use 'simple' for a single selection. Return null if uncertain.
+- bet_type: must be one of: 'simple', 'parlay', 'crear_apuesta'. Rules: use 'parlay' when 2+ DIFFERENT matches are combined into one ticket. Use 'crear_apuesta' when there are 2+ selections on the SAME match (e.g. "Team A wins AND Over 2.5 goals" — same game, multiple markets). Use 'simple' for a single selection on one match, regardless of how many outcomes exist for that match. Return null if uncertain.
 - device_type: must be one of: 'mobile', 'desktop'. Infer from the layout of the ticket screenshot.
 
 Expected JSON structure:
@@ -168,25 +167,6 @@ def extract_ticket_data(image_bytes: bytes) -> dict:
 # DB persistence
 # ---------------------------------------------------------------------------
 
-def _to_decimal_odds(value) -> float | None:
-    """Convert American or decimal odds to decimal format rounded to 2 places."""
-    if value is None:
-        return None
-    try:
-        v = float(str(value).replace(",", "."))
-    except (ValueError, TypeError):
-        return None
-    # American format: >= 100 or <= -100
-    if v >= 100:
-        return round(1 + v / 100, 2)
-    if v <= -100:
-        return round(1 + 100 / abs(v), 2)
-    # Negative decimal odds don't exist — model likely misread American odds (e.g. -3.2 → -320)
-    if v < 1:
-        return None
-    # Already decimal
-    return round(v, 2)
-
 
 def _clean(value):
     """Return None if value is missing, the string 'null', or 'none'."""
@@ -223,10 +203,10 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
         payout = data.get("payout")
         net_profit = round(payout - stake, 2) if (payout is not None and stake is not None) else None
 
-    raw_odds = data.get("odds")
-    odds = _to_decimal_odds(raw_odds)
-    if (not odds or odds == 0) and stake and payout and stake > 0:
-        odds = round(payout / stake, 2)
+    try:
+        odds = float(data.get("odds") or 0) or None
+    except (ValueError, TypeError):
+        odds = None
 
     ticket = BettingTicket(
         ticket_id=ticket_id,
