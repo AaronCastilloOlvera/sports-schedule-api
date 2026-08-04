@@ -85,7 +85,7 @@ Rules:
 - If the description contains 'incl. Prorroga', remove it.
 - league: NEVER return null if team names are visible. Use your sports knowledge to infer the league. MLB teams include: Yankees, Red Sox, Dodgers, Giants, Padres, Cubs, Mets, Braves, Astros, Rangers, Rockies, Blue Jays, Cardinals, Phillies — if you see any of these, league is 'MLB'. Only return null if the image is completely unreadable.
 - pick: the selected outcome (e.g. 'Home', 'Over 2.5', 'Yes', 'Team A'). For parlays, list each pick separated by ' + ' (e.g. "SF Giants + SD Padres").
-- match_name: use 'Home Team vs Away Team' format. For parlays, list all matches separated by ' | '.
+- match_name: use 'Away Team vs Home Team' format (never use '@'). For MLB and other US sports, include the city abbreviation in uppercase before the team nickname (e.g. 'HOU Astros vs LA Angels', 'BOS Red Sox vs NYY Yankees'). For parlays, list all matches separated by ' | '.
 - match_datetime: YYYY-MM-DDTHH:MM:SS — if the year is not visible, use {year}.
 - status: must be one of: 'pending', 'won', 'lost', 'push'. Use 'pending' if no result is shown.
 - sport: must be one of: 'futbol', 'basketball', 'american_football', 'baseball'. Infer from the teams and league. Return null if uncertain.
