@@ -22,7 +22,7 @@ def get_team_recent_matches(team_id: int, db: Session = Depends(database.get_db)
             Fixture.status.in_(FINISHED_STATUSES),
         )
         .order_by(Fixture.date_utc.desc())
-        .limit(5)
+        .limit(10)
         .all()
     )
 
