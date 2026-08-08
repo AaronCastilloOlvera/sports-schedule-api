@@ -13,6 +13,14 @@ class BetService:
   def get_tickets(self):
     return self.db.query(models.BettingTicket).order_by(models.BettingTicket.ticket_id.desc()).all()
 
+  def get_leagues_by_sport(self, sport: str):
+    rows = self.db.execute(text("""
+        SELECT DISTINCT league FROM betting_tickets
+        WHERE sport = :sport AND league IS NOT NULL AND league != ''
+        ORDER BY league
+    """), {'sport': sport}).fetchall()
+    return [r.league for r in rows]
+
   def get_tickets_paginated(self, page: int = 0, limit: int = 10, search: str = ''):
     query = self.db.query(models.BettingTicket)
     if search:
@@ -126,7 +134,7 @@ class BetService:
     league_data = sorted(
         [{'league': k, 'profit': round(v['p'], 2), 'roi': round(v['p']/v['s']*100, 1) if v['s'] else 0, 'count': v['n']}
          for k, v in lm.items()],
-        key=lambda x: -x['profit'])[:10]
+        key=lambda x: -x['profit'])
 
     # bet_type_data
     bm: dict = {}

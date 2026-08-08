@@ -35,6 +35,10 @@ def get_bets_stats(db: Session = Depends(database.get_db)):
 def get_bets_analytics(db: Session = Depends(database.get_db)):
   return BetService(db).get_analytics()
 
+@router.get("/leagues")
+def get_leagues_by_sport(sport: str = Query(...), db: Session = Depends(database.get_db)):
+  return BetService(db).get_leagues_by_sport(sport)
+
 @router.get("/get-ticket-by-id")
 def get_ticket_by_id(ticket_id: str, db: Session = Depends(database.get_db)):
   bet_service = BetService(db)
