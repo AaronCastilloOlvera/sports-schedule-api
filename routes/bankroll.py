@@ -1,13 +1,25 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from utils import database, schemas
 from services.bankroll_service import BankrollService
 
 router = APIRouter(prefix="/bankroll", tags=["Bankroll"])
 
-@router.get("/transactions", response_model=list[schemas.BankrollTransaction])
-def get_transactions(db: Session = Depends(database.get_db)):
-    return BankrollService(db).get_transactions()
+@router.get("/summary")
+def get_summary(db: Session = Depends(database.get_db)):
+    return BankrollService(db).get_summary()
+
+@router.get("/chart-data")
+def get_chart_data(db: Session = Depends(database.get_db)):
+    return BankrollService(db).get_chart_data()
+
+@router.get("/transactions")
+def get_transactions(
+    page:  int = Query(0,  ge=0),
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(database.get_db),
+):
+    return BankrollService(db).get_transactions(page=page, limit=limit)
 
 @router.post("/transactions", response_model=schemas.BankrollTransaction)
 def create_transaction(tx: schemas.BankrollTransactionCreate, db: Session = Depends(database.get_db)):

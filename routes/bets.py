@@ -2,7 +2,7 @@ import google.genai as genai
 import io
 import json
 import os
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, Query
 from PIL import Image
 from google.genai import types
 from dotenv import load_dotenv
@@ -18,10 +18,22 @@ load_dotenv()
 router = APIRouter(prefix="/bets", tags=["Bets"])
 client = genai.Client(api_key=os.getenv("GENAI_API_KEY"))
 
-@router.get("/get-tickets", response_model=list[schemas.BettingTicket])
-def read_betting_tickets(db: Session = Depends(database.get_db)):
-  bet_service = BetService(db)
-  return bet_service.get_tickets()
+@router.get("/get-tickets")
+def read_betting_tickets(
+    page:   int = Query(0,  ge=0),
+    limit:  int = Query(10, ge=1, le=100),
+    search: str = Query(''),
+    db: Session = Depends(database.get_db),
+):
+  return BetService(db).get_tickets_paginated(page=page, limit=limit, search=search)
+
+@router.get("/stats")
+def get_bets_stats(db: Session = Depends(database.get_db)):
+  return BetService(db).get_stats()
+
+@router.get("/analytics")
+def get_bets_analytics(db: Session = Depends(database.get_db)):
+  return BetService(db).get_analytics()
 
 @router.get("/get-ticket-by-id")
 def get_ticket_by_id(ticket_id: str, db: Session = Depends(database.get_db)):
