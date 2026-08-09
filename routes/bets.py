@@ -12,23 +12,12 @@ from fastapi import Depends, Form, HTTPException
 from datetime import timezone
 from dateutil import parser
 from services.bet_service import BetService
+from utils.odds import normalize_odds
 
 load_dotenv()
 
 router = APIRouter(prefix="/bets", tags=["Bets"])
 client = genai.Client(api_key=os.getenv("GENAI_API_KEY"))
-
-def _normalize_odds(val):
-    """If odds look like American format (abs >= 100, whole number), convert to decimal."""
-    if val is None:
-        return val
-    try:
-        v = float(val)
-    except (ValueError, TypeError):
-        return val
-    if abs(v) >= 100 and v == int(v):
-        return round((v / 100) + 1, 2) if v > 0 else round((100 / abs(v)) + 1, 2)
-    return v
 
 @router.get("/get-tickets")
 def read_betting_tickets(
@@ -108,24 +97,24 @@ async def analyze_betting_ticket(file: UploadFile = File(...)):
       "sport": "Futbol",
       "league": "Liga MX",
       "pick": "Over 2.5 goals",
-      "odds": 1.95,
-      "stake": 200.0,
-      "payout": 350.0,
-      "net_profit": 150.0,
+      "odds": 1.85,
+      "stake": 1500.0,
+      "payout": 2775.0,
+      "net_profit": 1275.0,
       "status": "won",
       "match_name": "Club América vs Chivas",
       "isParley": False,
       "isCreateBet": False,
       "match_datetime": "2025-12-26T15:30:00",
       "device_type": "movil",
-      "studied": True,
+      "studied": False,
       "comments": ""
-  }
+    }
 
     prompt = (
       "Analyze this betting ticket image and extract the data into JSON format. "
       "RULES: "
-      "1. Convert American odds (+110, -150) to decimal (2.10, 1.66). "
+      "1. Extract 'odds' exactly as shown on the ticket — do not convert or modify the format. "
       "2. Infer 'league' (e.g., Premier League, NBA) from the context. "
       "3. 'pick': Extract only what was chosen (e.g., 'Over 2.5', 'Both teams to score'). "
       "4. 'status': use 'pending' unless the ticket explicitly says 'won'/'paid' or 'lost'. "
@@ -136,6 +125,7 @@ async def analyze_betting_ticket(file: UploadFile = File(...)):
       "9. 'device_type': Detect if the layout is from a mobile app ('movil') or web browser ('desktop'). "
       "10. 'studied': always false. 'comments': always empty string. "
       "11. Format 'match_datetime' as ISO 8601. "
+      "12. Extract monetary values (stake, payout, net_profit) as full numbers — if the ticket shows '$1,000' return 1000.0, not 100.0. "
       "Return ONLY the JSON object, no markdown, no explanation. "
       f"Structure: {json.dumps(json_example)}"
     )
@@ -150,7 +140,7 @@ async def analyze_betting_ticket(file: UploadFile = File(...)):
     )
     
     result = json.loads(response.text)
-    result['odds'] = _normalize_odds(result.get('odds'))
+    result['odds'] = normalize_odds(result.get('odds'))
     return result
 
   except Exception as e:

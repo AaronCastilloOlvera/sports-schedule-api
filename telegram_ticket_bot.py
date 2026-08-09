@@ -55,6 +55,7 @@ import requests
 from datetime import datetime
 from dotenv import load_dotenv
 from utils.database import SessionLocal
+from utils.odds import normalize_odds
 from models.betting_ticket import BettingTicket
 
 load_dotenv()
@@ -177,6 +178,7 @@ def _clean(value):
     return value
 
 
+
 def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
     ticket_id = _clean(data.get("ticket_id")) or str(uuid.uuid4())
 
@@ -204,7 +206,7 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
         net_profit = round(payout - stake, 2) if (payout is not None and stake is not None) else None
 
     try:
-        odds = float(data.get("odds") or 0) or None
+        odds = normalize_odds(float(data.get("odds") or 0) or None)
     except (ValueError, TypeError):
         odds = None
 
