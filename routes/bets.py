@@ -18,6 +18,18 @@ load_dotenv()
 router = APIRouter(prefix="/bets", tags=["Bets"])
 client = genai.Client(api_key=os.getenv("GENAI_API_KEY"))
 
+def _normalize_odds(val):
+    """If odds look like American format (abs >= 100, whole number), convert to decimal."""
+    if val is None:
+        return val
+    try:
+        v = float(val)
+    except (ValueError, TypeError):
+        return val
+    if abs(v) >= 100 and v == int(v):
+        return round((v / 100) + 1, 2) if v > 0 else round((100 / abs(v)) + 1, 2)
+    return v
+
 @router.get("/get-tickets")
 def read_betting_tickets(
     page:   int = Query(0,  ge=0),
@@ -137,7 +149,9 @@ async def analyze_betting_ticket(file: UploadFile = File(...)):
       )
     )
     
-    return json.loads(response.text)
+    result = json.loads(response.text)
+    result['odds'] = _normalize_odds(result.get('odds'))
+    return result
 
   except Exception as e:
     return {"error": f"Failed to read file: {str(e)}"}
