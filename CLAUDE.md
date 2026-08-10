@@ -46,6 +46,10 @@ Route → Service → Redis (live/today's schedule, odds)
 
 `routes/bankroll.py` — CRUD for deposit/withdrawal transactions. Endpoints: `GET /bankroll/transactions`, `POST /bankroll/transactions`, `PUT /bankroll/transactions/{id}`, `DELETE /bankroll/transactions/{id}`. Business logic in `services/bankroll_service.py`. Model in `models/bankroll_transaction.py`.
 
+`routes/bets.py` — Betting ticket CRUD + AI ticket scanning. Endpoints: `GET /bets/get-tickets`, `GET /bets/stats`, `GET /bets/analytics`, `GET /bets/leagues?sport=X` (distinct league values from DB per sport, used for autocomplete), `GET /bets/get-ticket-by-id`, `POST /bets/create-ticket`, `PUT /bets/update-ticket`, `DELETE /bets/delete-ticket`, `POST /bets/upload-ticket-image`, `POST /bets/analyze-ticket` (Gemini 2.5 Flash Lite vision → structured JSON). Business logic in `services/bet_service.py`. The `analyze-ticket` endpoint post-processes `odds` via `utils/odds.py:normalize_odds` before returning.
+
+`utils/odds.py` — Shared `normalize_odds(val)` utility. Detects American odds (abs ≥ 100 and whole number) and converts to decimal; decimal odds pass through unchanged. Imported by both `routes/bets.py` (web UI) and `telegram_ticket_bot.py` (Telegram bot). Never duplicate this logic elsewhere.
+
 `routes/baseball.py` — Baseball schedule and boxscore endpoints (LMB + MLB). Endpoints: `GET /baseball/schedule?date=YYYY-MM-DD&league=lmb|mlb`, `GET /baseball/boxscore/{game_pk}`. Business logic in `services/baseball_service.py`. Data from `services/mlb_api_client.py` → `statsapi.mlb.com/api/v1` (free, no auth). Redis cache TTL: 2 min. LMB: `sportId=23, leagueId=125`. MLB: `sportId=1`.
 
 ### Background job chain
