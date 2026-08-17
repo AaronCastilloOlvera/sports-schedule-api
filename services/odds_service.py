@@ -2,7 +2,7 @@ import json
 from utils.redis_client import get_redis_connection
 from services.sports_api_client import SportsAPIClient
 
-ODDS_TTL = 43200  # 12 hours
+ODDS_TTL = 86400  # 24 hours
 
 ALLOWED_BOOKMAKERS = {"bet365", "1xbet", "betano"}
 

@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from dotenv import load_dotenv
 from tasks.prewarm_finished_fixtures import PrewarmFinishedFixturesWorker
 from tasks.persist_finished_fixtures import PersistFinishedFixturesWorker
+from tasks.prewarm_bet_radar import BetRadarPrewarmWorker
 
 load_dotenv()
 
@@ -53,6 +54,7 @@ async def trigger_sync(background_tasks: BackgroundTasks, tables: list[str] = No
 
 prewarm_finished_worker = PrewarmFinishedFixturesWorker()
 persist_worker = PersistFinishedFixturesWorker()
+bet_radar_worker = BetRadarPrewarmWorker()
 
 def run_persist_pipeline(date: str):
   prewarm_finished_worker.prewarm_finished_fixtures(date)
@@ -70,4 +72,18 @@ async def trigger_persist_fixtures(background_tasks: BackgroundTasks, date: str)
 
   background_tasks.add_task(run_persist_pipeline, date)
   return {"message": f"Persist pipeline initiated for {date}."}
+
+
+@router.post("/prewarm-bet-radar")
+async def trigger_prewarm_bet_radar(background_tasks: BackgroundTasks, date: str):
+  """
+  Genera y cachea las sugerencias BetRadar para una fecha específica.
+  Útil para backfill o para fechas donde el pipeline nocturno no corrió.
+  Localhost-only.
+  """
+  if os.getenv("APP_ENV") != "localhost":
+    raise HTTPException(status_code=403, detail="Only allowed in localhost environment.")
+
+  background_tasks.add_task(bet_radar_worker.prewarm_scout, date)
+  return {"message": f"BetRadar prewarm iniciado para {date}."}
 
