@@ -24,13 +24,14 @@ def read_betting_tickets(
     page:   int = Query(0,  ge=0),
     limit:  int = Query(10, ge=1, le=100),
     search: str = Query(''),
+    league: str = Query(''),
     db: Session = Depends(database.get_db),
 ):
-  return BetService(db).get_tickets_paginated(page=page, limit=limit, search=search)
+  return BetService(db).get_tickets_paginated(page=page, limit=limit, search=search, league=league)
 
 @router.get("/stats")
-def get_bets_stats(db: Session = Depends(database.get_db)):
-  return BetService(db).get_stats()
+def get_bets_stats(league: str = Query(''), db: Session = Depends(database.get_db)):
+  return BetService(db).get_stats(league=league)
 
 @router.get("/analytics")
 def get_bets_analytics(db: Session = Depends(database.get_db)):

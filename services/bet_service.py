@@ -21,10 +21,12 @@ class BetService:
     """), {'sport': sport}).fetchall()
     return [r.league for r in rows]
 
-  def get_tickets_paginated(self, page: int = 0, limit: int = 10, search: str = ''):
+  def get_tickets_paginated(self, page: int = 0, limit: int = 10, search: str = '', league: str = ''):
     query = self.db.query(models.BettingTicket)
     if search:
       query = query.filter(models.BettingTicket.ticket_id.ilike(f'%{search}%'))
+    if league:
+      query = query.filter(models.BettingTicket.league == league)
     total = query.count()
     data  = (query
              .order_by(models.BettingTicket.match_datetime.desc())
@@ -33,8 +35,9 @@ class BetService:
              .all())
     return {'total': total, 'page': page, 'limit': limit, 'data': data}
 
-  def get_stats(self):
-    row = self.db.execute(text("""
+  def get_stats(self, league: str = ''):
+    where = "WHERE league = :league" if league else ""
+    row = self.db.execute(text(f"""
         SELECT
             COUNT(*)                                                             AS total,
             COUNT(*) FILTER (WHERE status = 'won')                              AS won,
@@ -42,8 +45,8 @@ class BetService:
             COALESCE(SUM(CASE WHEN status != 'pending' THEN net_profit ELSE 0 END), 0) AS net_profit,
             COALESCE(SUM(stake), 0)                                              AS total_staked,
             COALESCE(AVG(CASE WHEN odds > 0 THEN odds END), 0)                   AS avg_odds
-        FROM betting_tickets
-    """)).fetchone()
+        FROM betting_tickets {where}
+    """), {'league': league} if league else {}).fetchone()
     won_or_lost = int(row.won_or_lost)
     return {
         'total':        int(row.total),
