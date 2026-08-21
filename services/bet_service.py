@@ -102,6 +102,22 @@ class BetService:
         acc += float(r.net_profit or 0)
         accumulated_data.append({'date': fmt(r.match_datetime), 'profit': round(acc, 2)})
 
+    # accumulated_by_sport — one running total per sport, merged by date
+    sports = sorted({r.sport or 'Unknown' for r in rows})
+    sport_acc: dict = {s: 0.0 for s in sports}
+    acc_by_sport = []
+    for r in rows:
+        sport_acc[r.sport or 'Unknown'] += float(r.net_profit or 0)
+        acc_by_sport.append({'date': fmt(r.match_datetime), **{s: round(sport_acc[s], 2) for s in sports}})
+
+    # accumulated_by_bet_type
+    bet_types = sorted({r.bet_type or 'Unknown' for r in rows})
+    btype_acc: dict = {b: 0.0 for b in bet_types}
+    acc_by_bet_type = []
+    for r in rows:
+        btype_acc[r.bet_type or 'Unknown'] += float(r.net_profit or 0)
+        acc_by_bet_type.append({'date': fmt(r.match_datetime), **{b: round(btype_acc[b], 2) for b in bet_types}})
+
     # daily_data — keep dict to deduplicate same day
     by_day: dict = {}
     for r in rows:
@@ -223,8 +239,12 @@ class BetService:
     avg_odds  = round(sum(r.odds for r in with_odds) / len(with_odds), 2) if with_odds else 0
 
     return {
-        'accumulated_data':   accumulated_data,
-        'daily_data':         daily_data,
+        'accumulated_data':        accumulated_data,
+        'accumulated_by_sport':    acc_by_sport,
+        'accumulated_by_bet_type': acc_by_bet_type,
+        'sports':                  sports,
+        'bet_types':               bet_types,
+        'daily_data':              daily_data,
         'win_loss_counts':    win_loss_counts,
         'sport_data':         sport_data,
         'league_data':        league_data,
