@@ -52,7 +52,8 @@ import uuid
 import base64
 import time
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 from utils.database import SessionLocal
 from utils.odds import normalize_odds
@@ -187,11 +188,15 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
     with open(image_path, "wb") as f:
         f.write(image_bytes)
 
+    MX_TZ = ZoneInfo("America/Mexico_City")
     match_dt = None
     raw_dt = data.get("match_datetime")
     if raw_dt:
         try:
-            match_dt = datetime.fromisoformat(raw_dt)
+            naive = datetime.fromisoformat(raw_dt)
+            # The model extracts local MX time from the ticket image.
+            # Attach the MX timezone so PostgreSQL stores the correct UTC equivalent.
+            match_dt = naive.replace(tzinfo=MX_TZ)
         except (ValueError, TypeError):
             pass
 
@@ -220,7 +225,7 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
         stake=stake,
         payout=payout,
         net_profit=net_profit,
-        match_datetime=match_dt or datetime.utcnow(),
+        match_datetime=match_dt or datetime.now(timezone.utc),
         status=status,
         sport=_clean(data.get("sport")) or "futbol",
         device_type=data.get("device_type"),
