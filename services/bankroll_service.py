@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from models.bankroll_transaction import BankrollTransaction
@@ -146,17 +147,24 @@ class BankrollService:
             for d, v in sorted(by_date.items())
         ]
 
-        # cumulativeWithdrawals
+        # cumulativeWithdrawals — fill every calendar day so the chart shows flat
+        # horizontal segments on days with no withdrawal instead of curved interpolation.
         wd_by_date: dict = {}
         for tx in txs:
             if tx.type == 'withdrawal':
                 d = str(tx.date)[:10]
                 wd_by_date[d] = (wd_by_date.get(d) or 0.0) + float(tx.amount)
-        running = 0.0
         cumulative_withdrawals = []
-        for d, amt in sorted(wd_by_date.items()):
-            running += amt
-            cumulative_withdrawals.append({'date': fmt_week_label(d), 'total': round(running, 2)})
+        if wd_by_date:
+            start = date.fromisoformat(min(wd_by_date.keys()))
+            end = date.today()
+            running = 0.0
+            current = start
+            while current <= end:
+                d_str = str(current)
+                running += wd_by_date.get(d_str, 0.0)
+                cumulative_withdrawals.append({'date': fmt_week_label(d_str), 'total': round(running, 2)})
+                current += timedelta(days=1)
 
         # stakeVsBankroll — for each resolved ticket, bankroll before the bet
         all_events: list = []
