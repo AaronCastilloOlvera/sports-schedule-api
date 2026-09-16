@@ -10,7 +10,7 @@ from utils.redis_client import get_redis_connection
 from services.bet_radar_service import BetRadarService
 from services.notification_service import NotificationService
 
-BET_RADAR_TTL = 7 * 24 * 3600  # 1 week
+BET_RADAR_TTL = 30 * 24 * 3600  # 30 days
 
 # Mirror of the frontend findOdd logic — keeps the same bookmaker/pattern preference
 _BET_SEARCH = {

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, JSON
 from .base import Base
 import datetime
 
@@ -24,3 +24,4 @@ class BettingTicket(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     image_path = Column(String, nullable=True)
+    legs = Column(JSON, nullable=True)

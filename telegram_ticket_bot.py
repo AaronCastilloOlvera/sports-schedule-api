@@ -55,6 +55,7 @@ import requests
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
+from sqlalchemy import text
 from utils.database import SessionLocal
 from utils.odds import normalize_odds
 from models.betting_ticket import BettingTicket
@@ -69,50 +70,69 @@ TICKET_IMAGES_DIR = os.getenv("TICKET_IMAGES_DIR", "ticket_images")
 
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
+# When True, photos are analyzed but NOT saved to DB — JSON is returned instead.
+preview_mode: bool = False
+
+
 def _build_prompt() -> str:
     year = datetime.now().year
-    return f"""Analyze this betting ticket image and extract the information as a compact JSON object.
-Return ONLY the JSON. No markdown, no code blocks, no explanation.
+    return f"""Extract data from this betting ticket image and return ONLY a JSON object. No markdown, no explanation.
 
-Today's year is {year}. Use this when the year is not visible on the ticket.
+If the year is not visible, use {year}.
 
-Rules:
-- odds: Look for the TOTAL/COMBINED odds on the ticket — usually labeled "Momios", "Cuota", "Odds", or "Total odds". Return the number EXACTLY as it appears on the ticket — do NOT convert. If the ticket shows "+150", return 150. If it shows "-320", return -320. If it shows "2.10", return 2.10. For parlays, use the combined total odds, NOT individual leg odds. If you truly cannot read it, return 0.
-- Remove special characters and extra spaces from text fields.
-- sport: one of exactly "futbol", "basketball", "american_football", "baseball" (lowercase, matches the app's enum — never a display label like "Soccer" or "Baseball"). Infer from the team names/sport shown. Never null.
-- league: the COMPETITION name, not the sport — e.g. "Liga MX", "Premier League", "NBA", "MLB", "LMB". NEVER return the sport itself here (e.g. never "baseball" or "futbol" as the league). Use team names + sport to infer it: for baseball specifically, US teams → "MLB" (Major League Baseball), Mexican teams → "LMB" (Liga Mexicana de Béisbol). NEVER return null if team names are visible — only return null if the image is completely unreadable. Formatting rule: the leagues NFL, MLS, NBA, MLB and LMB must always be written in ALL CAPS exactly as shown. All other leagues must be written in PascalCase (e.g. "Premier League", "Liga Mx", "Champions League", "Bundesliga").
-- pick: for parlays, list each selected team or outcome separated by ' + ' (e.g. "SF Giants + SD Padres"). Never return null if team names are visible.
-- stake: use the total amount wagered shown on the ticket (e.g. "Apuesta total", "Total stake"). Ignore individual leg amounts.
-- Remove special characters and extra spaces from text fields.
-- If the description contains 'incl. Prorroga', remove it.
-- league: NEVER return null if team names are visible. Use your sports knowledge to infer the league. MLB teams include: Yankees, Red Sox, Dodgers, Giants, Padres, Cubs, Mets, Braves, Astros, Rangers, Rockies, Blue Jays, Cardinals, Phillies — if you see any of these, league is 'MLB'. Only return null if the image is completely unreadable.
-- pick: the selected outcome (e.g. 'Home', 'Over 2.5', 'Yes', 'Team A'). For parlays, list each pick separated by ' + ' (e.g. "SF Giants + SD Padres").
-- match_name: use 'Away Team vs Home Team' format (never use '@'). For MLB and other US sports, include the city abbreviation in uppercase before the team nickname (e.g. 'HOU Astros vs LA Angels', 'BOS Red Sox vs NYY Yankees'). For parlays, list all matches separated by ' | '.
-- match_datetime: YYYY-MM-DDTHH:MM:SS — if the year is not visible, use {year}.
-- status: must be one of: 'pending', 'won', 'lost', 'push'. Use 'pending' if no result is shown.
-- sport: must be one of: 'futbol', 'basketball', 'american_football', 'baseball'. Infer from the teams and league. Return null if uncertain.
-- bet_type: must be one of: 'simple', 'parlay', 'crear_apuesta'. Rules: use 'parlay' when 2+ DIFFERENT matches are combined into one ticket. Use 'crear_apuesta' when there are 2+ selections on the SAME match (e.g. "Team A wins AND Over 2.5 goals" — same game, multiple markets). Use 'simple' for a single selection on one match, regardless of how many outcomes exist for that match. Return null if uncertain.
-- device_type: must be one of: 'mobile', 'desktop'. Infer from the layout of the ticket screenshot.
+STEP 1 — Determine bet_type:
+- If the ticket shows "SGP" → bet_type = "crear_apuesta" (always, no exceptions)
+- If 2+ different matches combined → bet_type = "parlay"
+- If 1 match AND 2+ selections on the same game → bet_type = "crear_apuesta"
+- If 1 match AND 1 selection → bet_type = "simple"
 
-Expected JSON structure:
+STEP 2 — Fill legs (REQUIRED for crear_apuesta and parlay, null for simple):
+List every individual selection. Each leg:
+  match_name: "Team A vs Team B"
+  league: competition name
+  pick: human-readable description (e.g. "Yellow Cards Under 5.5")
+  market: one of goals / corners / cards / btts / moneyline / other
+  side: over / under / yes / no / home / away / null
+  line_used: numeric line (e.g. 5.5) or null
+  odd: individual leg odd if shown, else null
+  outcome: true if won, false if lost, null if pending
+  pick: ALWAYS in English using this exact format: "Market Side Line" — e.g. "Corners Under 11.5", "Yellow Cards Under 5.5", "Goals Over 2.5", "BTTS Yes". Never use the ticket's original language.
+
+STEP 3 — Fill remaining fields:
+- ticket_id: ID printed on the ticket, or null
+- sport: futbol / basketball / american_football / baseball (infer from teams, never null)
+- league: competition name (NFL/MLS/NBA/MLB/LMB in ALL CAPS; others PascalCase). For multi-league parlay use "Parlay" in this top-level field ONLY. Never the sport name itself.
+- legs[].league: ALWAYS the specific competition of that individual match — NEVER "Parlay". Infer it from the team names.
+- match_name: "Away Team vs Home Team". For parlay: "Match1 | Match2". For US sports prefix city abbreviation (e.g. "HOU Astros vs LA Angels").
+- pick: all selections joined with " + " (e.g. "Yellow Cards Under 5.5 + Corners Under 11.5")
+- odds: TOTAL combined odds exactly as shown (e.g. -132, +210, 2.10). Do NOT convert. Use 0 if unreadable.
+- stake: total amount wagered ("Apuesta total"). Never a per-leg amount.
+- payout: total payout shown, or null
+- match_datetime: YYYY-MM-DDTHH:MM:SS, use {year} if year not visible
+- status: won / lost / push / pending (pending if no result shown)
+- device_type: mobile / desktop
+
+Return this exact structure:
 {{
-  "ticket_id": "ID printed on the ticket or null",
+  "ticket_id": "5351285259",
   "sport": "futbol",
-  "league": "competition name or null",
-  "match_name": "Home Team vs Away Team",
-  "bet_type": "simple",
-  "pick": "selected outcome",
-  "odds": 2.10,
-  "stake": 100.0,
-  "payout": 185.0,
-  "match_datetime": "YYYY-MM-DDTHH:MM:SS or null",
-  "status": "pending",
+  "league": "MLS",
+  "match_name": "Inter Miami CF vs CF Montreal",
+  "bet_type": "crear_apuesta",
+  "pick": "Yellow Cards Under 5.5 + Corners Under 11.5",
+  "odds": -132,
+  "stake": 1000.0,
+  "payout": null,
+  "match_datetime": "2026-08-29T17:30:00",
+  "status": "lost",
   "device_type": "mobile",
   "studied": false,
-  "comments": ""
-}}
-
-Set any field to null if it cannot be determined from the image."""
+  "comments": "",
+  "legs": [
+    {{"match_name": "Inter Miami CF vs CF Montreal", "league": "MLS", "pick": "Cards Under 5.5", "market": "cards", "side": "under", "line_used": 5.5, "odd": null, "outcome": true}},
+    {{"match_name": "Inter Miami CF vs CF Montreal", "league": "MLS", "pick": "Corners Under 11.5", "market": "corners", "side": "under", "line_used": 11.5, "odd": null, "outcome": false}}
+  ]
+}}"""
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +252,7 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
         studied=data.get("studied") or False,
         comments=data.get("comments") or "",
         image_path=image_path,
+        legs=data.get("legs"),
     )
 
     db = SessionLocal()
@@ -251,10 +272,71 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
 # Message handlers
 # ---------------------------------------------------------------------------
 
+_MARKET_LABEL = {
+    "goals": "Goals", "total": "Goals",
+    "corners": "Corners",
+    "cards": "Cards", "yellow_cards": "Cards",
+    "btts": "BTTS", "moneyline": "Moneyline", "other": "Other",
+}
+_SIDE_LABEL = {
+    "over": "Over", "under": "Under",
+    "yes": "Yes", "no": "No",
+    "home": "Home", "away": "Away",
+}
+
+def _normalize_leg_pick(leg: dict) -> str:
+    market = _MARKET_LABEL.get(leg.get("market", ""), leg.get("market", ""))
+    side = _SIDE_LABEL.get(leg.get("side", ""), "")
+    line = leg.get("line_used")
+    parts = [p for p in [market, side, str(line) if line is not None else None] if p]
+    return " ".join(parts)
+
+
+def _lookup_league(match_name: str, match_datetime: str | None) -> str | None:
+    """Query fixtures DB to find the league for a match. Returns None if not found."""
+    if not match_name:
+        return None
+    # For parlays ("Match1 | Match2") only use the first match
+    first_match = match_name.split("|")[0].strip()
+    parts = [p.strip() for p in first_match.replace(" vs. ", " vs ").split(" vs ")]
+    if len(parts) < 2:
+        return None
+    home, away = parts[0], parts[1]
+
+    date_filter = ""
+    params: dict = {"home": f"%{home}%", "away": f"%{away}%"}
+    if match_datetime:
+        try:
+            params["date"] = match_datetime[:10]
+            date_filter = "AND DATE(f.date_utc) = :date"
+        except Exception:
+            pass
+
+    db = SessionLocal()
+    try:
+        row = db.execute(text(f"""
+            SELECT l.name
+            FROM fixtures f
+            JOIN leagues l ON l.id = f.league_id
+            WHERE (f.home_team_name ILIKE :home OR f.away_team_name ILIKE :home)
+              AND (f.home_team_name ILIKE :away OR f.away_team_name ILIKE :away)
+              {date_filter}
+            LIMIT 1
+        """), params).fetchone()
+        return row[0] if row else None
+    except Exception as e:
+        print(f"[db] league lookup error: {e}")
+        return None
+    finally:
+        db.close()
+
+
 def handle_photo(message: dict) -> None:
+    global preview_mode
     chat_id = str(message["chat"]["id"])
 
-    send_message(chat_id, "Analizando ticket... (puede tardar hasta 1 minuto)")
+    mode_tag = " [PREVIEW — no se guardará]" if preview_mode else ""
+    send_message(chat_id, f"Analizando ticket...{mode_tag} (puede tardar hasta 1 minuto)")
 
     photo = message["photo"][-1]  # highest resolution
     try:
@@ -270,6 +352,30 @@ def handle_photo(message: dict) -> None:
         return
     except Exception as e:
         send_message(chat_id, f"Error al analizar la imagen con Ollama: {e}")
+        return
+
+    # Override league using DB lookup
+    if data.get("bet_type") != "parlay":
+        db_league = _lookup_league(data.get("match_name"), data.get("match_datetime"))
+        if db_league:
+            data["league"] = db_league
+
+    # For every leg (crear_apuesta and parlay), look up league and normalize pick
+    normalized_picks = []
+    for leg in data.get("legs") or []:
+        db_league = _lookup_league(leg.get("match_name"), data.get("match_datetime"))
+        if db_league:
+            leg["league"] = db_league
+        leg["pick"] = _normalize_leg_pick(leg)
+        normalized_picks.append(leg["pick"])
+
+    # Rebuild top-level pick from normalized legs
+    if normalized_picks:
+        data["pick"] = " + ".join(normalized_picks)
+
+    if preview_mode:
+        pretty = json.dumps(data, ensure_ascii=False, indent=2)
+        send_message(chat_id, f"Preview (no guardado):\n\n{pretty}")
         return
 
     try:
@@ -311,7 +417,12 @@ def handle_update(update: dict) -> None:
         handle_photo(message)
     elif "text" in message:
         text = message["text"].strip()
-        if text.startswith("/won") or text.startswith("/lost"):
+        if text.startswith("/preview"):
+            global preview_mode
+            preview_mode = not preview_mode
+            state = "activado ✅" if preview_mode else "desactivado ❌"
+            send_message(chat_id, f"Modo preview {state}. Las fotos {'NO se guardarán, solo retornaré el JSON extraído.' if preview_mode else 'se guardarán normalmente en la base de datos.'}")
+        elif text.startswith("/won") or text.startswith("/lost"):
             parts = text.split()
             if len(parts) < 2:
                 send_message(chat_id, "Uso: /won &lt;ticket_id&gt; o /lost &lt;ticket_id&gt;")

@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 class LeagueBase(BaseModel):
     id: int
@@ -66,6 +66,7 @@ class BettingTicketBase(BaseModel):
     device_type: Optional[str] = None
     studied: bool = False
     comments: str = ""
+    legs: Optional[Any] = None
 
 class BettingTicketCreate(BettingTicketBase):
     pass
