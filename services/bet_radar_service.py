@@ -1,9 +1,15 @@
+import json
 from collections import defaultdict
+from datetime import datetime, timedelta
+
+import pytz
 from sqlalchemy.orm import Session
 from sqlalchemy import text, bindparam
 
 MIN_MATCHES = 4
 MIN_DOW_SAMPLE = 30  # minimum fixtures per weekday to trust DOW multipliers
+FINISHED_STATUSES = ('FT', 'AET', 'PEN')
+ACCURACY_TTL = 3600  # 1 h — hit rates only shift as the day's fixtures settle
 
 LINES = {
     'corners':      [8.5, 9.5, 10.5, 11.5],
@@ -46,6 +52,135 @@ class BetRadarService:
 
     def get_suggestions_from_list(self, fixtures: list, date_str: str):
         return self._run_pipeline(fixtures, date_str)
+
+    def get_accuracy(self, redis_client, days: int = 7, min_confidence: int = 70, end_date: str = None):
+        """
+        Cross-references cached predictions (Redis) against actual results (DB).
+        Returns overall + per-market hit rates for the trailing `days` window,
+        excluding today (matches may still be in play).
+
+        Result is cached — it only shifts as the day's fixtures settle.
+        """
+        tz  = pytz.timezone('America/Mexico_City')
+        end = (datetime.strptime(end_date, '%Y-%m-%d').date() if end_date
+               else datetime.now(tz).date())
+
+        cache_key = f'bet_radar:accuracy:{end}:{days}:{min_confidence}'
+        if redis_client:
+            cached = redis_client.get(cache_key)
+            if cached:
+                return json.loads(cached)
+
+        dates = [(end - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(1, days + 1)]
+
+        picks, found, missing = [], [], []
+        for d in dates:
+            raw = redis_client.get(f'bet_radar:{d}') if redis_client else None
+            if not raw:
+                missing.append(d)
+                continue
+            found.append(d)
+            for s in json.loads(raw).get('suggestions', []):
+                for p in s.get('top_picks', []):
+                    if p['confidence'] >= min_confidence:
+                        picks.append({
+                            'date': d, 'fixture_id': s['fixture_id'],
+                            'market': p['market'], 'side': p['side'],
+                            'line': p.get('line'), 'confidence': p['confidence'],
+                        })
+
+        by_market = defaultdict(lambda: {'wins': 0, 'losses': 0})
+        wins = losses = unsettled = 0
+
+        if picks:
+            results = self._results_batch(list({p['fixture_id'] for p in picks}))
+            for p in picks:
+                outcome = self._evaluate_pick(p, results.get(p['fixture_id']))
+                if outcome is None:
+                    unsettled += 1
+                    continue
+                if outcome == 'win':
+                    wins += 1
+                    by_market[p['market']]['wins'] += 1
+                else:
+                    losses += 1
+                    by_market[p['market']]['losses'] += 1
+
+        settled = wins + losses
+        result = {
+            'days': days,
+            'min_confidence': min_confidence,
+            'dates_analyzed': found,
+            'dates_missing': missing,
+            'total_picks': len(picks),
+            'settled': settled,
+            'unsettled': unsettled,
+            'wins': wins,
+            'losses': losses,
+            'accuracy': round(wins / settled * 100) if settled else None,
+            'by_market': {
+                m: {
+                    'wins': v['wins'],
+                    'total': v['wins'] + v['losses'],
+                    'accuracy': round(v['wins'] / (v['wins'] + v['losses']) * 100),
+                }
+                for m, v in by_market.items() if (v['wins'] + v['losses']) > 0
+            },
+        }
+
+        if redis_client:
+            redis_client.setex(cache_key, ACCURACY_TTL, json.dumps(result))
+        return result
+
+    def _results_batch(self, fixture_ids: list) -> dict:
+        """One query for every fixture referenced by a pick — {fixture_id: row}."""
+        if not fixture_ids:
+            return {}
+        rows = self.db.execute(
+            text("""
+                SELECT
+                    f.id, f.home_goals, f.away_goals, f.status,
+                    hs.corners       AS home_corners,
+                    aws.corners      AS away_corners,
+                    hs.yellow_cards  AS home_cards,
+                    aws.yellow_cards AS away_cards
+                FROM fixtures f
+                LEFT JOIN fixture_team_stats hs  ON hs.fixture_id = f.id AND hs.is_home = true
+                LEFT JOIN fixture_team_stats aws ON aws.fixture_id = f.id AND aws.is_home = false
+                WHERE f.id IN :ids
+            """).bindparams(bindparam('ids', expanding=True)),
+            {'ids': fixture_ids},
+        ).fetchall()
+        return {row.id: row for row in rows}
+
+    @staticmethod
+    def _evaluate_pick(pick, row):
+        """'win' | 'loss' | None when the fixture is unfinished or lacks stats."""
+        if row is None or row.status not in FINISHED_STATUSES:
+            return None
+
+        hg, ag = row.home_goals or 0, row.away_goals or 0
+        market, side, line = pick['market'], pick['side'], pick['line']
+
+        if market == 'btts':
+            return 'win' if ('yes' if hg > 0 and ag > 0 else 'no') == side else 'loss'
+
+        if market == 'goals':
+            actual = hg + ag
+        elif market == 'corners':
+            if row.home_corners is None or row.away_corners is None:
+                return None
+            actual = row.home_corners + row.away_corners
+        elif market == 'yellow_cards':
+            if row.home_cards is None or row.away_cards is None:
+                return None
+            actual = row.home_cards + row.away_cards
+        else:
+            return None
+
+        if line is None:
+            return None
+        return 'win' if (actual > line if side == 'over' else actual < line) else 'loss'
 
     def _run_pipeline(self, fixtures, date_str: str):
         if not fixtures:

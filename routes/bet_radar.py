@@ -28,3 +28,16 @@ def get_cached_bet_radar(
     if raw is None:
         raise HTTPException(status_code=404, detail=f"No hay BetRadar cacheado para {date}.")
     return json.loads(raw)
+
+
+@router.get("/accuracy")
+def get_bet_radar_accuracy(
+    days: int = Query(7, ge=1, le=30, description="Ventana de días hacia atrás (excluye hoy)"),
+    min_confidence: int = Query(70, ge=0, le=100, description="Confianza mínima del pick"),
+    db: Session = Depends(get_db),
+):
+    """Efectividad real de los picks: predicciones en Redis vs resultados en BD."""
+    r, error = get_redis_connection()
+    if r is None:
+        raise HTTPException(status_code=503, detail=f"Redis unavailable: {error}")
+    return BetRadarService(db).get_accuracy(r, days=days, min_confidence=min_confidence)
