@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, bindparam
 
 MIN_MATCHES = 4
+MIN_DOW_SAMPLE = 30  # minimum fixtures per weekday to trust DOW multipliers
 
 LINES = {
     'corners':      [8.5, 9.5, 10.5, 11.5],
@@ -41,22 +42,21 @@ class BetRadarService:
     # ── public ────────────────────────────────────────────────────────────────
 
     def get_suggestions(self, date_str: str):
-        """On-demand endpoint: queries DB for finished fixtures on date_str."""
         return self._run_pipeline(self._get_fixtures_for_date(date_str), date_str)
 
     def get_suggestions_from_list(self, fixtures: list, date_str: str):
-        """Nightly worker: fixtures come from Redis (NS matches), not the DB."""
         return self._run_pipeline(fixtures, date_str)
 
     def _run_pipeline(self, fixtures, date_str: str):
         if not fixtures:
             return {'date': date_str, 'fixtures_analyzed': 0, 'suggestions': [], 'parlay_suggestion': None}
 
-        # 4 batch queries total instead of 4×N per-fixture queries
-        home_ids  = [f.home_team_id for f in fixtures]
-        away_ids  = [f.away_team_id for f in fixtures]
-        pairs     = [(f.home_team_id, f.away_team_id) for f in fixtures]
-        referees  = list({f.referee for f in fixtures if f.referee})
+        dow_mults = self._compute_dow_multipliers()
+
+        home_ids = [f.home_team_id for f in fixtures]
+        away_ids = [f.away_team_id for f in fixtures]
+        pairs    = [(f.home_team_id, f.away_team_id) for f in fixtures]
+        referees = list({f.referee for f in fixtures if f.referee})
 
         home_map = self._locality_batch(home_ids, is_home=True)
         away_map = self._locality_batch(away_ids, is_home=False)
@@ -70,15 +70,14 @@ class BetRadarService:
             home      = home_map.get(f.home_team_id, [])
             away      = away_map.get(f.away_team_id, [])
             h2h       = h2h_map.get(pair_key, [])
+            league_id = getattr(f, 'league_id', None)
+            dow       = f.date_utc.weekday() if f.date_utc else None  # 0=Mon, 6=Sun
 
-            analysis = self._analyze_fixture(f, home, away, h2h, ref_stats)
+            analysis = self._analyze_fixture(f, home, away, h2h, ref_stats, league_id, dow, dow_mults)
             if analysis and analysis['top_picks']:
                 results.append(analysis)
 
-        results.sort(
-            key=lambda x: x['top_picks'][0]['confidence'] if x['top_picks'] else 0,
-            reverse=True,
-        )
+        results.sort(key=lambda x: x['top_picks'][0]['confidence'] if x['top_picks'] else 0, reverse=True)
 
         return {
             'date': date_str,
@@ -86,6 +85,53 @@ class BetRadarService:
             'suggestions': results,
             'parlay_suggestion': self._build_parlay(results),
         }
+
+    # ── DOW multipliers ───────────────────────────────────────────────────────
+
+    def _compute_dow_multipliers(self) -> dict:
+        """
+        Derives per-weekday multipliers from DB history.
+        {dow: {'goals': float, 'corners': float, 'cards': float}}
+        dow uses Python weekday() — 0=Mon, 6=Sun.
+        Multiplier = day_avg / global_avg. Falls back to 1.0 when sample < MIN_DOW_SAMPLE.
+        """
+        rows = self.db.execute(text("""
+            SELECT
+                ((EXTRACT(DOW FROM f.date_utc AT TIME ZONE 'America/Mexico_City')::int + 6) % 7) AS dow,
+                COUNT(*) AS sample,
+                AVG(COALESCE(f.home_goals, 0) + COALESCE(f.away_goals, 0)) AS avg_goals,
+                AVG(CASE WHEN hs.corners IS NOT NULL AND aws.corners IS NOT NULL
+                         THEN hs.corners + aws.corners END) AS avg_corners,
+                AVG(CASE WHEN hs.yellow_cards IS NOT NULL AND aws.yellow_cards IS NOT NULL
+                         THEN hs.yellow_cards + aws.yellow_cards END) AS avg_cards
+            FROM fixtures f
+            JOIN fixture_team_stats hs  ON hs.fixture_id = f.id AND hs.is_home = true
+            JOIN fixture_team_stats aws ON aws.fixture_id = f.id AND aws.is_home = false
+            WHERE f.status IN ('FT','AET','PEN')
+            GROUP BY dow
+        """)).fetchall()
+
+        if not rows:
+            return {}
+
+        valid_goals   = [float(r.avg_goals)   for r in rows if r.avg_goals]
+        valid_corners = [float(r.avg_corners) for r in rows if r.avg_corners]
+        valid_cards   = [float(r.avg_cards)   for r in rows if r.avg_cards]
+
+        global_goals   = sum(valid_goals)   / len(valid_goals)   if valid_goals   else 1.0
+        global_corners = sum(valid_corners) / len(valid_corners) if valid_corners else 1.0
+        global_cards   = sum(valid_cards)   / len(valid_cards)   if valid_cards   else 1.0
+
+        result = {}
+        for r in rows:
+            sample = int(r.sample)
+            dow    = int(r.dow)
+            result[dow] = {
+                'goals':   round(float(r.avg_goals)   / global_goals,   3) if sample >= MIN_DOW_SAMPLE and r.avg_goals   else 1.0,
+                'corners': round(float(r.avg_corners) / global_corners, 3) if sample >= MIN_DOW_SAMPLE and r.avg_corners else 1.0,
+                'cards':   round(float(r.avg_cards)   / global_cards,   3) if sample >= MIN_DOW_SAMPLE and r.avg_cards   else 1.0,
+            }
+        return result
 
     # ── batch data queries ────────────────────────────────────────────────────
 
@@ -103,7 +149,6 @@ class BetRadarService:
         """), {'date': date_str}).fetchall()
 
     def _locality_batch(self, team_ids: list, is_home: bool, limit: int = 8) -> dict:
-        """One query for all teams — returns {team_id: [rows]}."""
         if not team_ids:
             return {}
         ids_str = ','.join(str(i) for i in set(team_ids))
@@ -111,6 +156,7 @@ class BetRadarService:
             SELECT * FROM (
                 SELECT
                     ts.team_id,
+                    f.league_id,
                     CASE WHEN ts.corners IS NOT NULL AND opp.corners IS NOT NULL
                          THEN ts.corners + opp.corners ELSE NULL END            AS total_corners,
                     COALESCE(f.home_goals, 0) + COALESCE(f.away_goals, 0)      AS total_goals,
@@ -143,7 +189,6 @@ class BetRadarService:
         return dict(result)
 
     def _h2h_batch(self, pairs: list, limit: int = 8) -> dict:
-        """One query for all H2H pairs — returns {(min_id, max_id): [rows]}."""
         if not pairs:
             return {}
         all_ids = set()
@@ -152,7 +197,7 @@ class BetRadarService:
             all_ids.add(t2)
         ids_str = ','.join(str(i) for i in all_ids)
 
-        canonical = {(min(t1, t2), max(t1, t2)) for t1, t2 in pairs}
+        canonical   = {(min(t1, t2), max(t1, t2)) for t1, t2 in pairs}
         pair_filter = ','.join(f'({a},{b})' for a, b in canonical)
 
         rows = self.db.execute(text(f"""
@@ -195,7 +240,6 @@ class BetRadarService:
         return dict(result)
 
     def _referee_batch(self, referees: list) -> dict:
-        """One query for all referees — returns {referee: stats_dict}."""
         if not referees:
             return {}
         rows = self.db.execute(
@@ -254,11 +298,7 @@ class BetRadarService:
         return round(hits / len(valid) * 100)
 
     def _weighted_confidence(self, home_vals, away_vals, h2h_vals, line, side):
-        slots = [
-            (home_vals, 0.35),
-            (away_vals, 0.35),
-            (h2h_vals,  0.30),
-        ]
+        slots = [(home_vals, 0.35), (away_vals, 0.35), (h2h_vals, 0.30)]
         parts, weights = [], []
         for vals, w in slots:
             valid = [v for v in vals if v is not None]
@@ -267,24 +307,43 @@ class BetRadarService:
                 if rate is not None:
                     parts.append(rate)
                     weights.append(w)
-
         if not parts:
             return None
         total_w = sum(weights)
         return round(sum(p * w / total_w for p, w in zip(parts, weights)))
 
+    def _league_avg(self, rows, col, league_id) -> float | None:
+        """
+        League-blended average: 70% same-league + 30% other-league.
+        Falls back to overall average when same-league has < MIN_MATCHES.
+        """
+        same  = [getattr(r, col) for r in rows if getattr(r, col) is not None and getattr(r, 'league_id', None) == league_id]
+        other = [getattr(r, col) for r in rows if getattr(r, col) is not None and getattr(r, 'league_id', None) != league_id]
+        all_v = same + other
+        if not all_v:
+            return None
+        if len(same) >= MIN_MATCHES:
+            s_avg = sum(same) / len(same)
+            o_avg = sum(other) / len(other) if other else s_avg
+            return s_avg * 0.70 + o_avg * 0.30
+        return sum(all_v) / len(all_v)
+
     # ── per-market analysis ───────────────────────────────────────────────────
 
-    def _analyze_corners(self, home, away, h2h):
+    def _analyze_corners(self, home, away, h2h, league_id, dow_mult):
         hv = self._vals(home, 'total_corners')
         av = self._vals(away, 'total_corners')
         xv = self._vals(h2h,  'total_corners')
-        all_v = hv + av + xv
-        if len(all_v) < MIN_MATCHES:
+        if len(hv + av + xv) < MIN_MATCHES:
             return None
 
-        avg  = sum(all_v) / len(all_v)
-        line = self._best_line(all_v, LINES['corners'], 9.5)
+        h_avg = self._league_avg(home, 'total_corners', league_id)
+        a_avg = self._league_avg(away, 'total_corners', league_id)
+        avg   = ((h_avg + a_avg) / 2 if h_avg is not None and a_avg is not None
+                 else sum(hv + av + xv) / len(hv + av + xv))
+        avg  *= dow_mult
+
+        line = self._best_line(hv + av + xv, LINES['corners'], 9.5)
         side = 'under' if avg < line else 'over'
         conf = self._weighted_confidence(hv, av, xv, line, side)
 
@@ -293,21 +352,21 @@ class BetRadarService:
         return {
             'projected': round(avg, 1),
             'line': line, 'side': side, 'confidence': conf,
-            'home_avg': self._avg(hv),
-            'away_avg': self._avg(av),
-            'h2h_avg':  self._avg(xv),
+            'home_avg': self._avg(hv), 'away_avg': self._avg(av), 'h2h_avg': self._avg(xv),
             'samples': {'home': len(hv), 'away': len(av), 'h2h': len(xv)},
         }
 
-    def _analyze_goals(self, home, away, h2h):
+    def _analyze_goals(self, home, away, h2h, league_id, dow_mult):
         hv = self._vals(home, 'total_goals')
         av = self._vals(away, 'total_goals')
         xv = self._vals(h2h,  'total_goals')
-        all_v = hv + av + xv
-        if len(all_v) < MIN_MATCHES:
+        if len(hv + av + xv) < MIN_MATCHES:
             return None
 
-        avg = sum(all_v) / len(all_v)
+        h_avg = self._league_avg(home, 'total_goals', league_id)
+        a_avg = self._league_avg(away, 'total_goals', league_id)
+        avg   = ((h_avg + a_avg) / 2 if h_avg is not None and a_avg is not None
+                 else sum(hv + av + xv) / len(hv + av + xv))
 
         xg_vals = self._vals(home, 'total_xg') + self._vals(away, 'total_xg')
         xg_avg  = None
@@ -315,23 +374,22 @@ class BetRadarService:
             xg_avg = round(sum(xg_vals) / len(xg_vals), 1)
             avg = avg * 0.65 + xg_avg * 0.35
 
-        line = self._best_line(all_v, LINES['goals'], 2.5)
+        avg *= dow_mult
+
+        line = self._best_line(hv + av + xv, LINES['goals'], 2.5)
         side = 'under' if avg < line else 'over'
         conf = self._weighted_confidence(hv, av, xv, line, side)
 
         if conf is None or conf < 58:
             return None
         return {
-            'projected': round(avg, 1),
-            'xg_avg': xg_avg,
+            'projected': round(avg, 1), 'xg_avg': xg_avg,
             'line': line, 'side': side, 'confidence': conf,
-            'home_avg': self._avg(hv),
-            'away_avg': self._avg(av),
-            'h2h_avg':  self._avg(xv),
+            'home_avg': self._avg(hv), 'away_avg': self._avg(av), 'h2h_avg': self._avg(xv),
             'samples': {'home': len(hv), 'away': len(av), 'h2h': len(xv)},
         }
 
-    def _analyze_yellow_cards(self, home, away, h2h, ref_stats):
+    def _analyze_yellow_cards(self, home, away, h2h, ref_stats, league_id, dow_mult):
         hv = self._vals(home, 'total_yellows')
         av = self._vals(away, 'total_yellows')
         xv = self._vals(h2h,  'total_yellows')
@@ -339,24 +397,28 @@ class BetRadarService:
 
         has_team_data = len(all_v) >= MIN_MATCHES
         has_ref_data  = ref_stats is not None
-
         if not has_team_data and not has_ref_data:
             return None
 
-        team_avg = sum(all_v) / len(all_v) if all_v else None
+        if has_team_data:
+            h_avg    = self._league_avg(home, 'total_yellows', league_id)
+            a_avg    = self._league_avg(away, 'total_yellows', league_id)
+            team_avg = ((h_avg + a_avg) / 2 if h_avg is not None and a_avg is not None
+                        else sum(all_v) / len(all_v))
+        else:
+            team_avg = None
 
         if has_ref_data:
             ref_avg = ref_stats['avg_yellows']
             ref_w   = min(0.50, ref_stats['sample_size'] / 20)
-            team_w  = 1 - ref_w
-            avg = (team_avg * team_w + ref_avg * ref_w) if team_avg is not None else ref_avg
+            avg     = (team_avg * (1 - ref_w) + ref_avg * ref_w) if team_avg is not None else ref_avg
         else:
-            avg     = team_avg
-            ref_avg = None
+            avg = team_avg
+
+        avg *= dow_mult
 
         line = self._best_line(all_v if all_v else [avg], LINES['yellow_cards'], 3.5)
         side = 'under' if avg < line else 'over'
-
         conf = self._weighted_confidence(hv, av, xv, line, side) if has_team_data else None
 
         if has_ref_data:
@@ -375,8 +437,7 @@ class BetRadarService:
             'line': line, 'side': side, 'confidence': conf,
             'referee_avg': ref_stats['avg_yellows'] if has_ref_data else None,
             'referee_sample': ref_stats['sample_size'] if has_ref_data else None,
-            'home_avg': self._avg(hv),
-            'away_avg': self._avg(av),
+            'home_avg': self._avg(hv), 'away_avg': self._avg(av),
             'samples': {
                 'home': len(hv), 'away': len(av), 'h2h': len(xv),
                 'referee': ref_stats['sample_size'] if has_ref_data else 0,
@@ -384,6 +445,7 @@ class BetRadarService:
         }
 
     def _analyze_btts(self, home, away, h2h):
+        # BTTS is a binary rate — DOW and league weighting don't apply
         hv = self._vals(home, 'btts')
         av = self._vals(away, 'btts')
         xv = self._vals(h2h,  'btts')
@@ -412,17 +474,19 @@ class BetRadarService:
 
     # ── orchestration ─────────────────────────────────────────────────────────
 
-    def _analyze_fixture(self, fixture, home, away, h2h, ref_stats):
-        home_id = fixture.home_team_id
-        away_id = fixture.away_team_id
-        hn      = fixture.home_team_name
-        an      = fixture.away_team_name
+    def _analyze_fixture(self, fixture, home, away, h2h, ref_stats, league_id, dow, dow_mults):
+        hn = fixture.home_team_name
+        an = fixture.away_team_name
+
+        dow_goals   = dow_mults.get(dow, {}).get('goals',   1.0) if dow is not None else 1.0
+        dow_corners = dow_mults.get(dow, {}).get('corners', 1.0) if dow is not None else 1.0
+        dow_cards   = dow_mults.get(dow, {}).get('cards',   1.0) if dow is not None else 1.0
 
         markets = {}
         for key, fn in [
-            ('corners',      lambda: self._analyze_corners(home, away, h2h)),
-            ('goals',        lambda: self._analyze_goals(home, away, h2h)),
-            ('yellow_cards', lambda: self._analyze_yellow_cards(home, away, h2h, ref_stats)),
+            ('corners',      lambda: self._analyze_corners(home, away, h2h, league_id, dow_corners)),
+            ('goals',        lambda: self._analyze_goals(home, away, h2h, league_id, dow_goals)),
+            ('yellow_cards', lambda: self._analyze_yellow_cards(home, away, h2h, ref_stats, league_id, dow_cards)),
             ('btts',         lambda: self._analyze_btts(home, away, h2h)),
         ]:
             result = fn()
@@ -433,8 +497,8 @@ class BetRadarService:
 
         return {
             'fixture_id':  fixture.id,
-            'home_team':   {'id': home_id, 'name': hn},
-            'away_team':   {'id': away_id, 'name': an},
+            'home_team':   {'id': fixture.home_team_id, 'name': hn},
+            'away_team':   {'id': fixture.away_team_id, 'name': an},
             'date':        fixture.date_utc.isoformat() if fixture.date_utc else None,
             'referee':     fixture.referee,
             'result':      f"{fixture.home_goals}-{fixture.away_goals}" if fixture.home_goals is not None else None,
