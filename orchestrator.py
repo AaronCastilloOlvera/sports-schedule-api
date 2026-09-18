@@ -7,6 +7,7 @@ from tasks.prewarm_h2h import PrewarmCacheWorker
 from tasks.live_matches import LiveWorker
 from tasks.prewarm_odds import PrewarmOddsWorker
 from tasks.prewarm_bet_radar import BetRadarPrewarmWorker
+from tasks.prewarm_mlb_radar import MLBRadarPrewarmWorker
 from tasks.persist_finished_fixtures import PersistFinishedFixturesWorker
 from tasks.persist_h2h_fixtures import PersistH2HFixturesWorker
 from tasks.persist_recent_matches import PersistRecentMatchesWorker
@@ -25,6 +26,7 @@ pipeline_minute = int(os.getenv("PIPELINE_MINUTE", 15))
 prewarm_worker = PrewarmCacheWorker()
 odds_worker = PrewarmOddsWorker()
 scout_worker = BetRadarPrewarmWorker()
+mlb_radar_worker = MLBRadarPrewarmWorker()
 persist_worker = PersistFinishedFixturesWorker()
 persist_h2h_worker = PersistH2HFixturesWorker()
 persist_recent_worker = PersistRecentMatchesWorker()
@@ -45,6 +47,8 @@ async def run_nightly_pipeline():
     await asyncio.to_thread(live_worker.calculate_live_windows)
     await asyncio.to_thread(odds_worker.prewarm_odds)
     await asyncio.to_thread(scout_worker.prewarm_scout)
+    # MLB Radar — Redis-only, fuente gratuita (statsapi.mlb.com), no toca la BD
+    await asyncio.to_thread(mlb_radar_worker.prewarm_mlb_radar)
 
     # Phase 2 — DB persist
     await asyncio.to_thread(persist_recent_worker.persist_recent_matches)

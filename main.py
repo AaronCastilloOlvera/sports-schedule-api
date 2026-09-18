@@ -10,7 +10,7 @@ from models import base as models
 import os
 
 # Import routers
-from routes import leagues, matches, redis, bets, dev_tools, status, teams, odds, bankroll, baseball, bet_radar
+from routes import leagues, matches, redis, bets, dev_tools, status, teams, odds, bankroll, baseball, bet_radar, mlb_radar
 from utils.redis_client import get_redis_connection
 
 # Load environment variables
@@ -50,6 +50,7 @@ app.include_router(odds.router)
 app.include_router(bankroll.router)
 app.include_router(baseball.router)
 app.include_router(bet_radar.router)
+app.include_router(mlb_radar.router)
 
 @app.get("/")
 def read_root():

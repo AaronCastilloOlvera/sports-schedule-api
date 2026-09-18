@@ -50,6 +50,8 @@ Route → Service → Redis (live/today's schedule, odds)
 
 `utils/odds.py` — Shared `normalize_odds(val)` utility. Detects American odds (abs ≥ 100 and whole number) and converts to decimal; decimal odds pass through unchanged. Imported by both `routes/bets.py` (web UI) and `telegram_ticket_bot.py` (Telegram bot). Never duplicate this logic elsewhere.
 
+`routes/mlb_radar.py` — MLB Radar: motor de picks de béisbol (MLB + LMB). Endpoints: `GET /mlb-radar/suggestions?date=&league=`, `GET /mlb-radar/cached?date=&league=`, `GET /mlb-radar/accuracy?days=&min_confidence=&league=&date=`. Lógica en `services/mlb_radar_service.py`, worker nocturno en `tasks/prewarm_mlb_radar.py`. **Redis-only, sin tablas ni migraciones** — `statsapi.mlb.com` es gratuita y sin cuota, así que re-consultar historia no cuesta nada. Cuatro mercados: `moneyline`, `nrfi`, `total` (líneas fijas 7.5/8.5/9.5), `hits` (líneas fijas 4.5/5.5/6.5/7.5, un pick por abridor). Las líneas de `total` y `hits` se eligen por cercanía a la expectativa neutral, **nunca** desde la proyección propia — elegirla desde la proyección garantiza caer del lado cómodo y produce hit rates ficticios. Confianza topada por tamaño de muestra (`CONFIDENCE_CAPS`); nunca emite 100. Todo pick lleva `odd: None` — no existe fuente de momios para MLB.
+
 `routes/baseball.py` — Baseball schedule and boxscore endpoints (LMB + MLB). Endpoints: `GET /baseball/schedule?date=YYYY-MM-DD&league=lmb|mlb`, `GET /baseball/boxscore/{game_pk}`. Business logic in `services/baseball_service.py`. Data from `services/mlb_api_client.py` → `statsapi.mlb.com/api/v1` (free, no auth). Redis cache TTL: 2 min. LMB: `sportId=23, leagueId=125`. MLB: `sportId=1`.
 
 ### Background job chain
@@ -102,6 +104,12 @@ All times are `America/Mexico_City`. Jobs that depend on previous output are gro
 |---|---|---|
 | `matches:date:{YYYY-MM-DD}` | 5 days | `MatchService` |
 | `odds:{fixture_id}` | 12 h | `OddsService` |
+| `mlb:day:{league}:{date}` | 30 d | `MLBRadarService` |
+| `mlb:gamelog:{league}:{pitcher_id}:{season}` | 12 h | `MLBRadarService` |
+| `mlb:pitcher:{league}:{pitcher_id}:{date}` | 2 d | `MLBRadarService` |
+| `mlb:boxpitch:{league}:{game_pk}` | 30 d | `MLBRadarService` |
+| `mlb_radar:{league}:{date}` | 30 d | `MLBRadarPrewarmWorker` |
+| `mlb_radar:accuracy:{league}:{end}:{days}:{min_conf}` | 1 h | `MLBRadarService` |
 
 Match data is **never written to the database** — it lives exclusively in Redis.
 

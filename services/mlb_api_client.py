@@ -9,6 +9,11 @@ LEAGUES = {
     "mlb": {"sportId": 1,  "leagueId": None},
 }
 
+# Regular season + every postseason round. Deliberately excludes 'P', the
+# API's duplicate postseason-aggregate split for a game already listed under
+# its specific round.
+POSTSEASON_GAME_TYPES = "R,F,D,L,W"
+
 
 class MLBApiClient:
     def __init__(self):
@@ -76,11 +81,18 @@ class MLBApiClient:
 
         return stat
 
-    def get_person_game_log(self, person_id: int, league: str = "lmb", seasons: list[int] | None = None) -> list:
+    def get_person_game_log(self, person_id: int, league: str = "lmb", seasons: list[int] | None = None,
+                            game_types: str | None = None) -> list:
         # Same sportId semantics as get_person_stats — one row per start, each
         # carrying its own `opponent` team so the caller can filter by matchup.
         # gameLog is inherently single-season on this API (no "career" mode),
         # so multi-season history means one call per year, concatenated here.
+        #
+        # `game_types` defaults to None, which the API reads as regular season
+        # only — playoff starts are simply absent. Pass POSTSEASON_GAME_TYPES to
+        # include them (LMB's season is half playoffs, so persistence needs it).
+        # Note the API also emits a duplicate 'P' aggregate split per postseason
+        # game, so callers that aggregate must de-dupe by gamePk.
         cfg = LEAGUES.get(league, LEAGUES["lmb"])
         years = seasons or [datetime.now().year]
         all_splits = []
@@ -91,6 +103,8 @@ class MLBApiClient:
                 "sportId": cfg["sportId"],
                 "season": year,
             }
+            if game_types:
+                params["gameType"] = game_types
             try:
                 r = requests.get(f"{self.base}/people/{person_id}/stats", headers=self.headers, params=params, timeout=10)
                 r.raise_for_status()
