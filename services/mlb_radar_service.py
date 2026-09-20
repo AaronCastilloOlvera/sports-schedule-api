@@ -10,7 +10,6 @@ Claves Redis que este servicio posee (nadie más escribe en ellas):
   mlb:day:{league}:{YYYY-MM-DD}        30 d  schedule + linescore recortado del día
   mlb:gamelog:{league}:{pid}:{season}  12 h  splits crudos del game log del pitcher
   mlb:pitcher:{league}:{pid}:{date}     2 d  perfil derivado (últimos 10 + vs rival)
-  mlb:boxpitch:{league}:{gamePk}       30 d  hits del abridor por juego (accuracy)
   mlb_radar:{league}:{YYYY-MM-DD}      30 d  picks calculados del día
   mlb_radar:accuracy:{league}:{...}     1 h  respuesta de get_accuracy
 
@@ -30,7 +29,6 @@ from services.mlb_api_client import MLBApiClient, LEAGUES, POSTSEASON_GAME_TYPES
 DAY_TTL      = 30 * 24 * 3600   # 30 d — un día pasado es inmutable
 GAMELOG_TTL  = 12 * 3600        # 12 h — aparece una línea nueva cada ~5 días
 PITCHER_TTL  = 2 * 24 * 3600    # 2 d  — perfil derivado, se recalcula cada noche
-BOXPITCH_TTL = 30 * 24 * 3600   # 30 d — hits del abridor, inmutable tras el final
 PICKS_TTL    = 30 * 24 * 3600   # 30 d — necesario para medir accuracy después
 ACCURACY_TTL = 3600             # 1 h
 
@@ -39,7 +37,9 @@ ACCURACY_TTL = 3600             # 1 h
 # a la expectativa neutral (promedio de liga / baseline encogido). De lo contrario
 # el motor siempre cae del lado cómodo y el hit rate resultante es ficticio.
 TOTAL_LINES = [7.5, 8.5, 9.5]
-HITS_LINES  = [4.5, 5.5, 6.5, 7.5]
+# Hits combinados del JUEGO (ambos equipos) — no existe prop de hits por
+# pitcher en el casino del usuario. Promedio real medido sobre 2,309 juegos: 16.41.
+TEAM_HITS_LINES = [14.5, 15.5, 16.5, 17.5, 18.5]
 
 # ── Muestras y tope de confianza ──────────────────────────────────────────────
 RECENT_STARTS   = 10   # aperturas recientes por pitcher
@@ -73,13 +73,12 @@ TOTAL_SP_IP_FRAC = 0.60  # parte del juego que cubre el abridor
 TOTAL_MARGIN_SCALE = 14.0
 TOTAL_MARGIN_CAP   = 22.0
 
-# Un "opener" (2 innings) casi siempre queda Under 4.5 — ningún libro ofrece
-# esa línea y en backtest el motor pierde -4.3 pts contra el constante ahí.
-HITS_MIN_IP_PER_START = 4.0
-HITS_W_VS_OPP_MAX  = 0.20
-HITS_OPP_CLAMP     = (0.75, 1.25)
-HITS_MARGIN_SCALE  = 16.0
-HITS_MARGIN_CAP    = 22.0
+# Hits totales del juego — mismos pesos que TOTAL (carreras), otra magnitud.
+TEAM_HITS_W_OFFENSE   = 0.50
+TEAM_HITS_W_PITCHER   = 0.55
+TEAM_HITS_SP_IP_FRAC  = 0.60
+TEAM_HITS_MARGIN_SCALE = 10.0
+TEAM_HITS_MARGIN_CAP   = 22.0
 
 # Defaults de liga usados solo si la caché de días está vacía
 FALLBACK_LEAGUE = {
@@ -94,7 +93,7 @@ MARKET_LABELS = {
     'moneyline': lambda m: f"Gana {m['pick_team_name']}",
     'nrfi':      lambda m: f"1er inning sin carreras: {'Sí' if m['side'] == 'yes' else 'No'}",
     'total':     lambda m: f"Carreras totales {'Over' if m['side'] == 'over' else 'Under'} {m['line']}",
-    'hits':      lambda m: f"Hits permitidos {m['pitcher_name']} {'Over' if m['side'] == 'over' else 'Under'} {m['line']}",
+    'hits':      lambda m: f"Hits totales {'Over' if m['side'] == 'over' else 'Under'} {m['line']}",
 }
 
 
@@ -280,6 +279,7 @@ def build_team_context(day_games: list, as_of: str) -> dict:
             tid = g[s].get('id')
             if tid is None:
                 continue
+            h_hits, a_hits = g['home'].get('hits'), g['away'].get('hits')
             rows[tid].append({
                 'date': g['date'],
                 'is_home': s == 'home',
@@ -287,6 +287,7 @@ def build_team_context(day_games: list, as_of: str) -> dict:
                 'runs_against': g[o].get('score') or 0,
                 'hits_for': g[s].get('hits'),
                 'total': (g['home'].get('score') or 0) + (g['away'].get('score') or 0),
+                'hits_total': (h_hits + a_hits) if h_hits is not None and a_hits is not None else None,
                 'won': (g[s].get('score') or 0) > (g[o].get('score') or 0),
                 'scored_first_inning': (g[s].get('first_inning_runs') or 0) > 0
                                        if g[s].get('first_inning_runs') is not None else None,
@@ -308,6 +309,7 @@ def build_team_context(day_games: list, as_of: str) -> dict:
             'runs_allowed_per_game': _mean([g['runs_against'] for g in recent]),
             'hits_per_game': _mean([g['hits_for'] for g in recent]),
             'totals': [g['total'] for g in recent],
+            'hits_totals': [g['hits_total'] for g in recent if g['hits_total'] is not None],
             'first_inning_rate': _mean([1.0 if g['scored_first_inning'] else 0.0 for g in first]),
             'first_inning_n': len(first),
         }
@@ -543,14 +545,11 @@ class MLBRadarService:
         total = self._analyze_total(hp, ap, ht, at, league_ctx, pf)
         if total:
             markets['total'] = total
+        hits = self._analyze_team_hits(hp, ap, ht, at, league_ctx, pf)
+        if hits:
+            markets['hits'] = hits
 
-        hits_picks = []
-        for prof, own, opp_team, opp in ((hp, home, at, away), (ap, away, ht, home)):
-            h = self._analyze_hits(prof, own, opp_team, opp, league_ctx, pf)
-            if h:
-                hits_picks.append(h)
-
-        top_picks = self._build_top_picks(markets, hits_picks)
+        top_picks = self._build_top_picks(markets)
         if not top_picks:
             return None
 
@@ -566,7 +565,6 @@ class MLBRadarService:
             'result': (f"{away.get('score')}-{home.get('score')}"
                        if is_final(g) else None),
             'markets': markets,
-            'hits_markets': hits_picks,
             'top_picks': top_picks,
         }
 
@@ -725,42 +723,49 @@ class MLBRadarService:
                         'starters': sp_n, 'total': n},
         }
 
-    def _analyze_hits(self, prof, own, opp_team, opp, lg, park_factor):
-        rec = (prof or {}).get('recent')
-        if not rec or rec['n'] < MIN_SAMPLE:
+    def _analyze_team_hits(self, hp, ap, ht, at, lg, park_factor):
+        """
+        Hits combinados del JUEGO (ambos equipos) — no del abridor. El casino del
+        usuario no ofrece props de hits por pitcher, así que este mercado predice
+        lo que sí es apostable, usando a los abridores como una señal más, igual
+        que TOTAL (carreras) usa su RA/9.
+        """
+        if not (ht and at) or ht['hits_per_game'] is None or at['hits_per_game'] is None:
             return None
-        if rec['ip_per_start'] < HITS_MIN_IP_PER_START:
-            return None   # opener / bulk reliever: el pick no es apostable
 
-        # ── Línea: baseline encogido mitad liga / mitad pitcher. Es la
-        # expectativa "de mercado"; la proyección completa decide over/under.
-        neutral = 0.5 * lg['sp_hits'] + 0.5 * rec['hits_per_start']
-        line = min(HITS_LINES, key=lambda l: abs(l - neutral))
+        # ── Línea: la MÁS CERCANA a la expectativa neutral (promedio de liga ×
+        # park factor). NUNCA se elige desde nuestra proyección.
+        lg_team = lg['team_hits']
+        neutral = 2 * lg_team * park_factor
+        line = min(TEAM_HITS_LINES, key=lambda l: abs(l - neutral))
 
-        opp_factor = 1.0
-        if opp_team and opp_team.get('hits_per_game') and lg.get('team_hits'):
-            opp_factor = _clamp(opp_team['hits_per_game'] / lg['team_hits'], *HITS_OPP_CLAMP)
+        off_dev = (ht['hits_per_game'] - lg_team) + (at['hits_per_game'] - lg_team)
 
-        proj = rec['hits_per_start'] * opp_factor * (1 + (park_factor - 1) * 0.5)
+        sp_dev, sp_n = 0.0, 0
+        if hp and hp.get('recent'):
+            sp_dev += hp['recent']['hits_per_start'] - lg['sp_hits']
+            sp_n += hp['recent']['n']
+        if ap and ap.get('recent'):
+            sp_dev += ap['recent']['hits_per_start'] - lg['sp_hits']
+            sp_n += ap['recent']['n']
 
-        vs = (prof or {}).get('vs_opponent')
-        vs_n = vs['n'] if vs else 0
-        if vs and vs_n >= 2:
-            w = min(HITS_W_VS_OPP_MAX, vs_n / 4.0 * HITS_W_VS_OPP_MAX)
-            proj = proj * (1 - w) + vs['hits_per_start'] * w
+        proj = (neutral
+                + TEAM_HITS_W_OFFENSE * off_dev
+                + TEAM_HITS_W_PITCHER * TEAM_HITS_SP_IP_FRAC * sp_dev)
 
         side = 'over' if proj > line else 'under'
         margin = abs(proj - line)
 
+        pooled = (ht.get('hits_totals') or []) + (at.get('hits_totals') or [])
         emp = None
-        if rec.get('hits_list'):
-            hits = sum(1 for h in rec['hits_list'] if (h > line if side == 'over' else h < line))
-            emp = hits / len(rec['hits_list']) * 100
+        if pooled:
+            hits = sum(1 for t in pooled if (t > line if side == 'over' else t < line))
+            emp = hits / len(pooled) * 100
 
-        conf_margin = 50 + min(HITS_MARGIN_CAP, margin * HITS_MARGIN_SCALE)
+        conf_margin = 50 + min(TEAM_HITS_MARGIN_CAP, margin * TEAM_HITS_MARGIN_SCALE)
         raw = round(0.55 * conf_margin + 0.45 * emp) if emp is not None else round(conf_margin)
 
-        n = rec['n'] + vs_n + (opp_team['n'] if opp_team else 0)
+        n = ht['n'] + at['n'] + sp_n
         cap = _cap_for(n)
         if cap is None:
             return None
@@ -769,14 +774,11 @@ class MLBRadarService:
             return None
         return {
             'side': side, 'line': line, 'confidence': conf,
-            'pitcher_id': own.get('pitcher_id'), 'pitcher_name': own.get('pitcher_name'),
-            'opponent_id': opp.get('id'), 'opponent_name': opp.get('name'),
             'projected': round(proj, 2), 'neutral': round(neutral, 2),
-            'recent_hits_per_start': rec['hits_per_start'],
-            'hits_per_9': rec['hits_per_9'],
-            'opp_factor': round(opp_factor, 3),
-            'samples': {'starts': rec['n'], 'vs_opponent': vs_n,
-                        'opponent_games': opp_team['n'] if opp_team else 0, 'total': n},
+            'park_factor': park_factor,
+            'home_hpg': round(ht['hits_per_game'], 2), 'away_hpg': round(at['hits_per_game'], 2),
+            'samples': {'home_team': ht['n'], 'away_team': at['n'],
+                        'starters': sp_n, 'total': n},
         }
 
     # ── ensamblado ────────────────────────────────────────────────────────────
@@ -794,11 +796,11 @@ class MLBRadarService:
             return (f"Proyección {d['projected']} carreras vs neutral {d['neutral']} "
                     f"· park factor {d['park_factor']}")
         if market == 'hits':
-            return (f"{d['pitcher_name']}: {d['recent_hits_per_start']} hits por apertura "
-                    f"({d['hits_per_9']}/9) vs {d['opponent_name']} · proyección {d['projected']}")
+            return (f"Proyección {d['projected']} hits vs neutral {d['neutral']} "
+                    f"· local {d['home_hpg']}/juego · visitante {d['away_hpg']}/juego")
         return ""
 
-    def _build_top_picks(self, markets: dict, hits_picks: list):
+    def _build_top_picks(self, markets: dict):
         picks = []
         for market, d in markets.items():
             picks.append({
@@ -810,18 +812,6 @@ class MLBRadarService:
                 'line': d.get('line'),
                 'samples': d.get('samples', {}),
                 'odd': None,   # no existe fuente de momios para MLB
-            })
-        for d in hits_picks:
-            picks.append({
-                'market': 'hits',
-                'label': MARKET_LABELS['hits'](d),
-                'note': self._note('hits', d),
-                'confidence': d['confidence'],
-                'side': d['side'],
-                'line': d['line'],
-                'samples': d.get('samples', {}),
-                'odd': None,
-                'pitcher_id': d['pitcher_id'],
             })
         picks.sort(key=lambda p: -p['confidence'])
         return picks
@@ -911,29 +901,6 @@ class MLBRadarService:
             r.setex(cache_key, ACCURACY_TTL, json.dumps(result))
         return result
 
-    def _starter_hits(self, game_pk: int, pitcher_id: int):
-        """Hits permitidos por un abridor. Cacheado por juego (inmutable)."""
-        key = f'mlb:boxpitch:{self.league}:{game_pk}'
-        data = None
-        if self.r:
-            cached = self.r.get(key)
-            if cached:
-                data = json.loads(cached)
-        if data is None:
-            box = self.client.get_boxscore(game_pk)
-            data = {}
-            for side in ('home', 'away'):
-                t = (box.get('teams') or {}).get(side) or {}
-                for pid in (t.get('pitchers') or []):
-                    pl = (t.get('players') or {}).get(f'ID{pid}') or {}
-                    st = (pl.get('stats') or {}).get('pitching') or {}
-                    if st.get('gamesStarted'):
-                        data[str(pid)] = st.get('hits')
-                    break
-            if self.r and data:
-                self.r.setex(key, BOXPITCH_TTL, json.dumps(data))
-        return data.get(str(pitcher_id))
-
     def _evaluate_pick(self, pick, game):
         """'win' | 'loss' | None si el juego no terminó o falta el dato."""
         if game is None or not is_final(game):
@@ -961,12 +928,12 @@ class MLBRadarService:
             return 'win' if (total > line if side == 'over' else total < line) else 'loss'
 
         if market == 'hits':
-            pid = pick.get('pitcher_id')
-            if not pid or line is None:
+            if line is None:
                 return None
-            actual = self._starter_hits(game['gamePk'], pid)
-            if actual is None:
+            h, a = game['home'].get('hits'), game['away'].get('hits')
+            if h is None or a is None:
                 return None
-            return 'win' if (actual > line if side == 'over' else actual < line) else 'loss'
+            total = h + a
+            return 'win' if (total > line if side == 'over' else total < line) else 'loss'
 
         return None
