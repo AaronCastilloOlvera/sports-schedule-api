@@ -8,6 +8,7 @@ from tasks.live_matches import LiveWorker
 from tasks.prewarm_odds import PrewarmOddsWorker
 from tasks.prewarm_bet_radar import BetRadarPrewarmWorker
 from tasks.prewarm_mlb_radar import MLBRadarPrewarmWorker
+from tasks.prewarm_nfl_radar import NFLRadarPrewarmWorker
 from tasks.persist_finished_fixtures import PersistFinishedFixturesWorker
 from tasks.persist_h2h_fixtures import PersistH2HFixturesWorker
 from tasks.persist_recent_matches import PersistRecentMatchesWorker
@@ -27,6 +28,7 @@ prewarm_worker = PrewarmCacheWorker()
 odds_worker = PrewarmOddsWorker()
 scout_worker = BetRadarPrewarmWorker()
 mlb_radar_worker = MLBRadarPrewarmWorker()
+nfl_radar_worker = NFLRadarPrewarmWorker()
 persist_worker = PersistFinishedFixturesWorker()
 persist_h2h_worker = PersistH2HFixturesWorker()
 persist_recent_worker = PersistRecentMatchesWorker()
@@ -49,6 +51,9 @@ async def run_nightly_pipeline():
     await asyncio.to_thread(scout_worker.prewarm_scout)
     # MLB Radar — Redis-only, fuente gratuita (statsapi.mlb.com), no toca la BD
     await asyncio.to_thread(mlb_radar_worker.prewarm_mlb_radar)
+    # NFL Radar — Redis-only, fuente gratuita (site.api.espn.com), corre TODAS
+    # las noches (calendario NFL varía); no-op limpio en noches sin juegos.
+    await asyncio.to_thread(nfl_radar_worker.prewarm_nfl_radar)
 
     # Phase 2 — DB persist
     await asyncio.to_thread(persist_recent_worker.persist_recent_matches)

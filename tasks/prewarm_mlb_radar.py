@@ -56,13 +56,19 @@ class MLBRadarPrewarmWorker:
                 )
 
                 n_games = result['games_analyzed']
+
+                # Se cachea SIEMPRE, incluso sin juegos — de lo contrario /cached
+                # da 404 y el front cae al cómputo en vivo de get_suggestions()
+                # (4 llamadas externas forzadas, ~5-7s) solo para descubrir que no
+                # hay nada que mostrar. Con temporada baja/fuera de temporada esto
+                # deja de ser un caso raro. Ver services/mlb_radar_service.py.
+                key = f'mlb_radar:{league}:{today}'
+                r.setex(key, PICKS_TTL, json.dumps(result, default=str))
+
                 if not n_games:
                     print(f' -> [{league}] sin juegos programados')
                     summary.append(f'{league.upper()}: sin juegos')
                     continue
-
-                key = f'mlb_radar:{league}:{today}'
-                r.setex(key, PICKS_TTL, json.dumps(result, default=str))
 
                 n_sug = len(result['suggestions'])
                 n_picks = sum(len(s['top_picks']) for s in result['suggestions'])

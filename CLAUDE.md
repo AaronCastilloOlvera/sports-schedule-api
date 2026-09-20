@@ -54,6 +54,8 @@ Route → Service → Redis (live/today's schedule, odds)
 
 `routes/baseball.py` — Baseball schedule and boxscore endpoints (LMB + MLB). Endpoints: `GET /baseball/schedule?date=YYYY-MM-DD&league=lmb|mlb`, `GET /baseball/boxscore/{game_pk}`. Business logic in `services/baseball_service.py`. Data from `services/mlb_api_client.py` → `statsapi.mlb.com/api/v1` (free, no auth). Redis cache TTL: 2 min. LMB: `sportId=23, leagueId=125`. MLB: `sportId=1`.
 
+`routes/nfl_radar.py` — NFL Radar: motor de picks de fútbol americano contra la línea de DraftKings. Endpoints: `GET /nfl-radar/suggestions?date=`, `GET /nfl-radar/cached?date=`, `GET /nfl-radar/accuracy?days=&min_confidence=&date=`. Lógica en `services/nfl_radar_service.py`, worker nocturno en `tasks/prewarm_nfl_radar.py`. **Redis-only, sin tablas ni migraciones.** Fuente: `site.api.espn.com/apis/site/v2/sports/football/nfl` — API no oficial de ESPN, gratuita y sin auth, pero indocumentada (`time.sleep(0.3)` entre llamadas secuenciales, nunca golpearla de más). A diferencia de MLB (sin momios) y de BetRadar de fútbol (momios parciales), aquí **sí hay momios reales** de casa de apuestas (`pickcenter`, se prefiere DraftKings). El motor no elige línea — la pone DraftKings — solo estima si la probabilidad implícita del mercado está mal: `edge = nuestra_prob − prob_implícita_del_mercado` (devig de dos vías estándar). Tres mercados, los tres con momio real: `moneyline`, `spread` (hándicap), `total`. Confianza topada por tamaño de muestra (`CONFIDENCE_CAPS`, idéntico a MLB) y gateada por `MIN_EDGE` (2pp) — nunca emite 100. `odd` lleva el momio DECIMAL real del lado recomendado (vía `utils/odds.py:normalize_odds`), a diferencia de MLB donde siempre es `None`. `HOME_FIELD_ADV`, `MARGIN_STD` y `TOTAL_STD` están derivados de la temporada regular 2025 completa (ver comentarios en el servicio), no son valores de libro de texto. **Importante:** el endpoint ESPN ignora `year` cuando se combina con `week` — la temporada se selecciona con `dates=<year>`, no `year=<year>`; `services/nfl_api_client.py` esconde esta rareza detrás de un parámetro `year` normal.
+
 ### Background job chain
 
 All times are `America/Mexico_City`. Jobs that depend on previous output are grouped into pipelines and run sequentially via `await asyncio.to_thread()`.
@@ -64,7 +66,10 @@ All times are `America/Mexico_City`. Jobs that depend on previous output are gro
          Phase 1 — Redis / prep
          ├── prewarm_match_schedules()   →  matches:date:{YYYY-MM-DD}
          ├── calculate_live_windows()    →  LiveWorker.active_windows     (reads step 1)
-         └── prewarm_odds()              →  odds:{fixture_id}             (reads step 1)
+         ├── prewarm_odds()              →  odds:{fixture_id}             (reads step 1)
+         ├── prewarm_scout()             →  bet_radar:{YYYY-MM-DD}
+         ├── prewarm_mlb_radar()         →  mlb_radar:{league}:{YYYY-MM-DD}
+         └── prewarm_nfl_radar()         →  nfl_radar:{YYYY-MM-DD}       (runs every night; no-op on days with no NFL games)
 
          Phase 2 — DB persist
          ├── persist_recent_matches()    →  PostgreSQL últimos 5 por equipo (API → BD)
@@ -110,6 +115,9 @@ All times are `America/Mexico_City`. Jobs that depend on previous output are gro
 | `mlb:boxpitch:{league}:{game_pk}` | 30 d | `MLBRadarService` |
 | `mlb_radar:{league}:{date}` | 30 d | `MLBRadarPrewarmWorker` |
 | `mlb_radar:accuracy:{league}:{end}:{days}:{min_conf}` | 1 h | `MLBRadarService` |
+| `nfl:day:{YYYY-MM-DD}` | 30 d | `NFLRadarService` |
+| `nfl_radar:{YYYY-MM-DD}` | 30 d | `NFLRadarPrewarmWorker` |
+| `nfl_radar:accuracy:{end}:{days}:{min_conf}` | 1 h | `NFLRadarService` |
 
 Match data is **never written to the database** — it lives exclusively in Redis.
 
