@@ -10,6 +10,7 @@ Claves Redis que este servicio posee (nadie más escribe en ellas):
   mlb:day:{league}:{YYYY-MM-DD}        30 d  schedule + linescore recortado del día
   mlb:gamelog:{league}:{pid}:{season}  12 h  splits crudos del game log del pitcher
   mlb:pitcher:{league}:{pid}:{date}     2 d  perfil derivado (últimos 10 + vs rival)
+  mlb:venue_tz:{venue_id}             180 d  IANA tz id del estadio (no cambia)
   mlb_radar:{league}:{YYYY-MM-DD}      30 d  picks calculados del día
   mlb_radar:accuracy:{league}:{...}     1 h  respuesta de get_accuracy
 
@@ -20,6 +21,7 @@ Todos los picks salen con la forma del feed de fútbol:
 import json
 from collections import defaultdict
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytz
 
@@ -31,6 +33,7 @@ GAMELOG_TTL  = 12 * 3600        # 12 h — aparece una línea nueva cada ~5 día
 PITCHER_TTL  = 2 * 24 * 3600    # 2 d  — perfil derivado, se recalcula cada noche
 PICKS_TTL    = 30 * 24 * 3600   # 30 d — necesario para medir accuracy después
 ACCURACY_TTL = 3600             # 1 h
+VENUE_TZ_TTL = 180 * 24 * 3600  # 180 d — la tz de un estadio no cambia
 
 # ── Líneas fijas de casa de apuestas ──────────────────────────────────────────
 # NUNCA se eligen a partir de nuestra propia proyección: se eligen por cercanía
@@ -56,6 +59,17 @@ MIN_CONFIDENCE_EMIT = 60  # backtest: la banda 56-59 rinde 51% (ruido puro)
 # ── Park factor ───────────────────────────────────────────────────────────────
 PARK_MIN_GAMES = 20    # menos de esto → factor 1.0
 PARK_CLAMP     = (0.85, 1.15)
+
+# ── Día de la semana / franja horaria ───────────────────────────────────────────
+# Un solo multiplicador por día específico (0=Lun..6=Dom) — igual que
+# `_compute_dow_multipliers()` de fútbol: no hay categoría aparte de
+# entre-semana/fin-de-semana, el efecto de fin de semana ya queda capturado en
+# los multiplicadores de sábado/domingo. Franja horaria calculada en hora LOCAL
+# del estadio (vía `MLBApiClient.get_venue_timezone`) para no mezclar las 4
+# zonas horarias de EEUU en un solo corte UTC.
+DOW_MIN_SAMPLE = 30
+TIME_BUCKETS = ('day', 'afternoon', 'evening')  # <15:00 / 15:00-18:00 / 18:00+ local
+DEFAULT_VENUE_TZ = 'America/New_York'     # fallback si la API no resuelve la tz
 
 # ── Pesos del modelo ──────────────────────────────────────────────────────────
 ML_W_TEAM       = 0.80   # diferencial de fuerza de equipo
@@ -227,6 +241,82 @@ def compute_park_factors(day_games: list) -> dict:
             _clamp((sum(totals) / len(totals)) / league_avg, *PARK_CLAMP), 3
         )
     return factors
+
+
+def local_dow_and_bucket(game_date_utc: str | None, venue_id, venue_tz: dict) -> tuple:
+    """
+    (día 0=Lun..6=Dom, franja 'day'/'afternoon'/'evening') del juego en hora
+    LOCAL del estadio. Se resuelve en local (no UTC) porque un juego nocturno
+    en la costa oeste puede caer en el día siguiente en UTC.
+    """
+    if not game_date_utc:
+        return None, None
+    try:
+        dt_utc = datetime.fromisoformat(game_date_utc.replace('Z', '+00:00'))
+    except ValueError:
+        return None, None
+    tz_name = venue_tz.get(venue_id) or DEFAULT_VENUE_TZ
+    try:
+        local = dt_utc.astimezone(ZoneInfo(tz_name))
+    except Exception:
+        local = dt_utc.astimezone(ZoneInfo(DEFAULT_VENUE_TZ))
+    hour = local.hour
+    bucket = 'day' if hour < 15 else ('afternoon' if hour < 18 else 'evening')
+    return local.weekday(), bucket
+
+
+def compute_day_time_multipliers(day_games: list, venue_tz: dict) -> tuple:
+    """
+    Multiplicadores por día de la semana y por franja horaria, ambos en hora
+    LOCAL del estadio. Se calcula UNA vez por corrida del pipeline, nunca por
+    juego. Espejo de `compute_park_factors()`: ratio vs. promedio global,
+    factor 1.0 si la muestra es menor a DOW_MIN_SAMPLE.
+
+    Devuelve (dow_mults, time_mults), cada uno {clave: {'runs': x, 'hits': x}}.
+    """
+    dow_runs, dow_hits = defaultdict(list), defaultdict(list)
+    time_runs, time_hits = defaultdict(list), defaultdict(list)
+    all_runs, all_hits = [], []
+
+    for g in day_games:
+        if not is_final(g):
+            continue
+        dow, bucket = local_dow_and_bucket(g.get('gameDate'), g.get('venue_id'), venue_tz)
+        if dow is None:
+            continue
+
+        runs = (g['home'].get('score') or 0) + (g['away'].get('score') or 0)
+        all_runs.append(runs)
+        dow_runs[dow].append(runs)
+        time_runs[bucket].append(runs)
+
+        h_hits, a_hits = g['home'].get('hits'), g['away'].get('hits')
+        if h_hits is not None and a_hits is not None:
+            hits = h_hits + a_hits
+            all_hits.append(hits)
+            dow_hits[dow].append(hits)
+            time_hits[bucket].append(hits)
+
+    def ratios(groups: dict, all_vals: list) -> dict:
+        if not all_vals:
+            return {}
+        avg = sum(all_vals) / len(all_vals)
+        if avg <= 0:
+            return {}
+        out = {}
+        for key, vals in groups.items():
+            if len(vals) >= DOW_MIN_SAMPLE:
+                out[key] = round((sum(vals) / len(vals)) / avg, 3)
+        return out
+
+    runs_by_dow, hits_by_dow = ratios(dow_runs, all_runs), ratios(dow_hits, all_hits)
+    runs_by_time, hits_by_time = ratios(time_runs, all_runs), ratios(time_hits, all_hits)
+
+    dow_mults = {d: {'runs': runs_by_dow.get(d, 1.0), 'hits': hits_by_dow.get(d, 1.0)}
+                for d in range(7)}
+    time_mults = {b: {'runs': runs_by_time.get(b, 1.0), 'hits': hits_by_time.get(b, 1.0)}
+                 for b in TIME_BUCKETS}
+    return dow_mults, time_mults
 
 
 def compute_league_context(day_games: list) -> dict:
@@ -458,6 +548,26 @@ class MLBRadarService:
             self.r.setex(key, GAMELOG_TTL, json.dumps(splits))
         return splits
 
+    # ── zona horaria de estadios ──────────────────────────────────────────────
+
+    def get_venue_tz(self, venue_id: int) -> str:
+        if not venue_id:
+            return DEFAULT_VENUE_TZ
+        key = f'mlb:venue_tz:{venue_id}'
+        if self.r:
+            cached = self.r.get(key)
+            if cached:
+                return cached
+        tz = self.client.get_venue_timezone(venue_id) or DEFAULT_VENUE_TZ
+        if self.r:
+            self.r.setex(key, VENUE_TZ_TTL, tz)
+        return tz
+
+    def build_venue_tz_lookup(self, games: list) -> dict:
+        """{venue_id: tz IANA} de todos los estadios distintos en `games`."""
+        venue_ids = {g.get('venue_id') for g in games if g.get('venue_id')}
+        return {vid: self.get_venue_tz(vid) for vid in venue_ids}
+
     # ── público ───────────────────────────────────────────────────────────────
 
     def get_suggestions(self, date: str, history_days: int = 60,
@@ -492,16 +602,20 @@ class MLBRadarService:
                 if self.r and prof:
                     self.r.setex(pkey, PITCHER_TTL, json.dumps(prof))
 
-        return self.analyze_slate(today, date, window, profiles)
+        venue_tz = self.build_venue_tz_lookup(window + today)
+        return self.analyze_slate(today, date, window, profiles, venue_tz)
 
-    def analyze_slate(self, games: list, date: str, window: list, profiles: dict) -> dict:
+    def analyze_slate(self, games: list, date: str, window: list, profiles: dict,
+                      venue_tz: dict) -> dict:
         """
         Seam compartido por producción y backtest: recibe el contexto ya armado
-        y devuelve el payload de picks. No hace red ni Redis.
+        y devuelve el payload de picks. No hace red ni Redis — `venue_tz` debe
+        venir ya resuelto (por eso `get_suggestions` lo arma antes de llamar aquí).
         """
         league_ctx = compute_league_context(window)
         park       = compute_park_factors(window)
         team_ctx   = build_team_context(window, date)
+        dow_mults, time_mults = compute_day_time_multipliers(window, venue_tz)
 
         # Constantes de abridor derivadas del propio slate (solo datos previos).
         sp_ra9  = [p['recent']['runs_per_9']     for p in profiles.values() if p and p.get('recent')]
@@ -511,7 +625,8 @@ class MLBRadarService:
 
         results = []
         for g in games:
-            analysis = self._analyze_game(g, profiles, team_ctx, league_ctx, park)
+            analysis = self._analyze_game(g, profiles, team_ctx, league_ctx, park,
+                                          dow_mults, time_mults, venue_tz)
             if analysis and analysis['top_picks']:
                 results.append(analysis)
 
@@ -527,13 +642,20 @@ class MLBRadarService:
 
     # ── por juego ─────────────────────────────────────────────────────────────
 
-    def _analyze_game(self, g, profiles, team_ctx, league_ctx, park):
+    def _analyze_game(self, g, profiles, team_ctx, league_ctx, park,
+                      dow_mults, time_mults, venue_tz):
         home, away = g['home'], g['away']
         hp = profiles.get((home.get('pitcher_id'), away.get('id')))
         ap = profiles.get((away.get('pitcher_id'), home.get('id')))
         ht = team_ctx.get(home.get('id'))
         at = team_ctx.get(away.get('id'))
         pf = park.get(g.get('venue_id'), 1.0)
+
+        dow, bucket = local_dow_and_bucket(g.get('gameDate'), g.get('venue_id'), venue_tz)
+        dow_mult  = dow_mults.get(dow, {}) if dow is not None else {}
+        time_mult = time_mults.get(bucket, {}) if bucket else {}
+        runs_mult = dow_mult.get('runs', 1.0) * time_mult.get('runs', 1.0)
+        hits_mult = dow_mult.get('hits', 1.0) * time_mult.get('hits', 1.0)
 
         markets = {}
         ml = self._analyze_moneyline(home, away, hp, ap, ht, at, league_ctx)
@@ -542,10 +664,10 @@ class MLBRadarService:
         nrfi = self._analyze_nrfi(hp, ap, ht, at, league_ctx)
         if nrfi:
             markets['nrfi'] = nrfi
-        total = self._analyze_total(hp, ap, ht, at, league_ctx, pf)
+        total = self._analyze_total(hp, ap, ht, at, league_ctx, pf, runs_mult)
         if total:
             markets['total'] = total
-        hits = self._analyze_team_hits(hp, ap, ht, at, league_ctx, pf)
+        hits = self._analyze_team_hits(hp, ap, ht, at, league_ctx, pf, hits_mult)
         if hits:
             markets['hits'] = hits
 
@@ -668,14 +790,14 @@ class MLBRadarService:
                         'total': n1 + n2},
         }
 
-    def _analyze_total(self, hp, ap, ht, at, lg, park_factor):
+    def _analyze_total(self, hp, ap, ht, at, lg, park_factor, day_time_mult=1.0):
         if not (ht and at) or ht['runs_per_game'] is None or at['runs_per_game'] is None:
             return None
 
         # ── Línea: la MÁS CERCANA a la expectativa neutral (promedio de liga ×
-        # park factor). NO se elige desde nuestra proyección — hacerlo garantiza
-        # caer siempre del lado cómodo y produce un hit rate ficticio.
-        neutral = lg['total_runs'] * park_factor
+        # park factor × día/hora). NO se elige desde nuestra proyección — hacerlo
+        # garantiza caer siempre del lado cómodo y produce un hit rate ficticio.
+        neutral = lg['total_runs'] * park_factor * day_time_mult
         line = min(TOTAL_LINES, key=lambda l: abs(l - neutral))
 
         # ── Proyección como DESVIACIÓN respecto a la neutral: centrada en cero
@@ -717,13 +839,13 @@ class MLBRadarService:
         return {
             'side': side, 'line': line, 'confidence': conf,
             'projected': round(proj, 2), 'neutral': round(neutral, 2),
-            'park_factor': park_factor,
+            'park_factor': park_factor, 'day_time_mult': round(day_time_mult, 3),
             'home_rpg': round(ht['runs_per_game'], 2), 'away_rpg': round(at['runs_per_game'], 2),
             'samples': {'home_team': ht['n'], 'away_team': at['n'],
                         'starters': sp_n, 'total': n},
         }
 
-    def _analyze_team_hits(self, hp, ap, ht, at, lg, park_factor):
+    def _analyze_team_hits(self, hp, ap, ht, at, lg, park_factor, day_time_mult=1.0):
         """
         Hits combinados del JUEGO (ambos equipos) — no del abridor. El casino del
         usuario no ofrece props de hits por pitcher, así que este mercado predice
@@ -734,9 +856,9 @@ class MLBRadarService:
             return None
 
         # ── Línea: la MÁS CERCANA a la expectativa neutral (promedio de liga ×
-        # park factor). NUNCA se elige desde nuestra proyección.
+        # park factor × día/hora). NUNCA se elige desde nuestra proyección.
         lg_team = lg['team_hits']
-        neutral = 2 * lg_team * park_factor
+        neutral = 2 * lg_team * park_factor * day_time_mult
         line = min(TEAM_HITS_LINES, key=lambda l: abs(l - neutral))
 
         off_dev = (ht['hits_per_game'] - lg_team) + (at['hits_per_game'] - lg_team)
@@ -775,7 +897,7 @@ class MLBRadarService:
         return {
             'side': side, 'line': line, 'confidence': conf,
             'projected': round(proj, 2), 'neutral': round(neutral, 2),
-            'park_factor': park_factor,
+            'park_factor': park_factor, 'day_time_mult': round(day_time_mult, 3),
             'home_hpg': round(ht['hits_per_game'], 2), 'away_hpg': round(at['hits_per_game'], 2),
             'samples': {'home_team': ht['n'], 'away_team': at['n'],
                         'starters': sp_n, 'total': n},

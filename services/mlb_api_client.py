@@ -143,3 +143,22 @@ class MLBApiClient:
         except requests.RequestException as e:
             print(f"[MLB CLIENT] final score error (gamePk={game_pk}): {e}")
             return None
+
+    def get_venue_timezone(self, venue_id: int) -> str | None:
+        """IANA tz id for a venue (e.g. 'America/New_York'), DST already resolved.
+        MLB's own classification — no need to maintain a stadium/timezone table."""
+        try:
+            r = requests.get(
+                f"{self.base}/venues/{venue_id}",
+                headers=self.headers,
+                params={"hydrate": "location,timezone"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            venues = r.json().get("venues", [])
+            if not venues:
+                return None
+            return (venues[0].get("timeZone") or {}).get("id")
+        except requests.RequestException as e:
+            print(f"[MLB CLIENT] venue timezone error (id={venue_id}): {e}")
+            return None
