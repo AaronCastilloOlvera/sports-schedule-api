@@ -91,12 +91,14 @@ List every individual selection. Each leg:
   match_name: "Team A vs Team B"
   league: competition name
   pick: human-readable description (e.g. "Yellow Cards Under 5.5")
-  market: one of goals / corners / cards / btts / moneyline / other
+  market: one of goals / corners / cards / btts / runs / moneyline / other
+    — "goals" is ONLY for soccer/hockey-style sports. For baseball/softball
+    totals ("Totales", "incl. extra innings") ALWAYS use "runs", never "goals".
   side: over / under / yes / no / home / away / null
   line_used: numeric line (e.g. 5.5) or null
   odd: individual leg odd if shown, else null
   outcome: true if won, false if lost, null if pending
-  pick: ALWAYS in English using this exact format: "Market Side Line" — e.g. "Corners Under 11.5", "Yellow Cards Under 5.5", "Goals Over 2.5", "BTTS Yes". Never use the ticket's original language.
+  pick: ALWAYS in English using this exact format: "Market Side Line" — e.g. "Corners Under 11.5", "Yellow Cards Under 5.5", "Goals Over 2.5", "Runs Under 9.5", "BTTS Yes". Never use the ticket's original language.
 
 STEP 3 — Fill remaining fields:
 - ticket_id: ID printed on the ticket, or null
@@ -104,7 +106,7 @@ STEP 3 — Fill remaining fields:
 - league: competition name (NFL/MLS/NBA/MLB/LMB in ALL CAPS; others PascalCase). For multi-league parlay use "Parlay" in this top-level field ONLY. Never the sport name itself.
 - legs[].league: ALWAYS the specific competition of that individual match — NEVER "Parlay". Infer it from the team names.
 - match_name: "Away Team vs Home Team". For parlay: "Match1 | Match2". For US sports prefix city abbreviation (e.g. "HOU Astros vs LA Angels").
-- pick: all selections joined with " + " (e.g. "Yellow Cards Under 5.5 + Corners Under 11.5")
+- pick: for simple bets, same "Market Side Line" format as legs (e.g. "Runs Under 9.5" for baseball, "Goals Under 2.5" for soccer — never "Goals" for baseball). For crear_apuesta/parlay, all legs joined with " + " (e.g. "Yellow Cards Under 5.5 + Corners Under 11.5")
 - odds: TOTAL combined odds exactly as shown (e.g. -132, +210, 2.10). Do NOT convert. Use 0 if unreadable.
 - stake: total amount wagered ("Apuesta total"). Never a per-leg amount.
 - payout: total payout shown, or null
@@ -272,11 +274,21 @@ def save_ticket(data: dict, image_bytes: bytes) -> BettingTicket:
 # Message handlers
 # ---------------------------------------------------------------------------
 
+# Ollama a veces devuelve sinonimos ("total" en vez de "goals"/"runs") en
+# lugar del enum exacto del prompt. El front solo reconoce goals/corners/
+# cards/btts/runs/moneyline/other — cualquier otra cosa deja el dropdown en
+# blanco y el pick sin icono. Esto normaliza el VALOR guardado, no solo el
+# texto mostrado. "total" es ambiguo entre deportes (goles vs carreras), asi
+# que se resuelve aparte segun el sport del ticket — ver _normalize_leg_pick.
+_MARKET_CANON = {
+    "goals": "goals",
+    "corners": "corners",
+    "cards": "cards", "yellow_cards": "cards",
+    "btts": "btts", "runs": "runs", "moneyline": "moneyline", "other": "other",
+}
 _MARKET_LABEL = {
-    "goals": "Goals", "total": "Goals",
-    "corners": "Corners",
-    "cards": "Cards", "yellow_cards": "Cards",
-    "btts": "BTTS", "moneyline": "Moneyline", "other": "Other",
+    "goals": "Goals", "corners": "Corners", "cards": "Cards",
+    "btts": "BTTS", "runs": "Runs", "moneyline": "Moneyline", "other": "Other",
 }
 _SIDE_LABEL = {
     "over": "Over", "under": "Under",
@@ -284,8 +296,12 @@ _SIDE_LABEL = {
     "home": "Home", "away": "Away",
 }
 
-def _normalize_leg_pick(leg: dict) -> str:
-    market = _MARKET_LABEL.get(leg.get("market", ""), leg.get("market", ""))
+def _normalize_leg_pick(leg: dict, sport: str | None = None) -> str:
+    raw_market = leg.get("market", "")
+    if raw_market == "total":
+        raw_market = "runs" if sport == "baseball" else "goals"
+    leg["market"] = _MARKET_CANON.get(raw_market, "other")
+    market = _MARKET_LABEL.get(leg["market"], leg["market"])
     side = _SIDE_LABEL.get(leg.get("side", ""), "")
     line = leg.get("line_used")
     parts = [p for p in [market, side, str(line) if line is not None else None] if p]
@@ -366,7 +382,7 @@ def handle_photo(message: dict) -> None:
         db_league = _lookup_league(leg.get("match_name"), data.get("match_datetime"))
         if db_league:
             leg["league"] = db_league
-        leg["pick"] = _normalize_leg_pick(leg)
+        leg["pick"] = _normalize_leg_pick(leg, data.get("sport"))
         normalized_picks.append(leg["pick"])
 
     # Rebuild top-level pick from normalized legs

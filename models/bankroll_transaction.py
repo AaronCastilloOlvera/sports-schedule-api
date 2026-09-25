@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date
+from sqlalchemy import Column, Integer, String, Float, DateTime
 from .base import Base
 import datetime
 
@@ -8,5 +8,5 @@ class BankrollTransaction(Base):
     id = Column(Integer, primary_key=True, index=True)
     type = Column(String, nullable=False)  # 'deposit' or 'withdrawal'
     amount = Column(Float, nullable=False)
-    date = Column(Date, nullable=False, default=datetime.date.today)
+    date = Column(DateTime, nullable=False, default=datetime.datetime.now)
     notes = Column(String, nullable=True)
