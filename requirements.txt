@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 psycopg2
+psycopg[binary]
 dotenv
 sqlalchemy
 typing
