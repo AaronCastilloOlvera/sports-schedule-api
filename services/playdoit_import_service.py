@@ -39,7 +39,7 @@ _STATUS_MAP = {
 # Altenar bet.device -> device_type. Confirmed with 2 real tickets.
 _DEVICE_MAP = {
     0: 'desktop',
-    1: 'movil',
+    1: 'mobile',
 }
 
 def _classify_bet_type(selections: list) -> str:
