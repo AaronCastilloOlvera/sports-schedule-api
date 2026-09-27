@@ -33,6 +33,11 @@ from utils.odds import normalize_odds
 
 REQUEST_SLEEP = 0.3  # ESPN endpoint no es oficial — ser respetuoso entre llamadas secuenciales
 
+# Retries for the live scoreboard call -- ESPN once returned 0 events on a
+# Sunday with 14 real games. See get_day().
+SCOREBOARD_RETRIES = 3
+SCOREBOARD_RETRY_SLEEP = 2  # seconds between retries
+
 # ── TTLs ──────────────────────────────────────────────────────────────────────
 DAY_TTL      = 30 * 24 * 3600   # 30 d — un juego terminado es inmutable
 PICKS_TTL    = 30 * 24 * 3600   # 30 d — necesario para medir accuracy después
@@ -309,13 +314,24 @@ class NFLRadarService:
     def get_day(self, date: str, force_refresh: bool = False) -> list:
         """Schedule compacto de un día específico. Pasado = inmutable ⇒ TTL largo."""
         key = self.day_key(date)
-        if self.r and not force_refresh:
-            cached = self.r.get(key)
-            if cached:
-                return json.loads(cached)
+        cached = self.r.get(key) if self.r else None
+        if cached and not force_refresh:
+            return json.loads(cached)
 
-        data = self.client.get_scoreboard(date=date.replace('-', ''))
-        events = data.get('events') or []
+        events = []
+        for attempt in range(SCOREBOARD_RETRIES):
+            data = self.client.get_scoreboard(date=date.replace('-', ''))
+            events = data.get('events') or []
+            if events:
+                break
+            if attempt < SCOREBOARD_RETRIES - 1:
+                time.sleep(SCOREBOARD_RETRY_SLEEP)
+
+        if not events and cached:
+            # Still empty after retries -- keep the existing cache instead
+            # of overwriting it with "no games".
+            return json.loads(cached)
+
         games = []
         for ev in events:
             eid = ev.get('id')
