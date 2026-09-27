@@ -6,6 +6,7 @@ import models
 import requests
 from utils.constants import HEADERS
 from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm.attributes import flag_modified
 from typing import List, Optional
 from fastapi import APIRouter, Query, Depends, HTTPException
 from utils import database
@@ -53,6 +54,59 @@ def update_league(league_id: int, is_favorite: bool, db: Session = Depends(datab
   league.is_favorite = is_favorite
   db.commit()
   db.refresh(league)
+  return league
+
+@router.put("/associate-playdoit-champ")
+def associate_playdoit_champ(league_id: int, playdoit_champ_id: int, db: Session = Depends(database.get_db)):
+  """
+  Links a playdoit_champ_id (Altenar's league/tournament id) to an
+  existing league -- used once per league, from the ticket detail in the
+  frontend. After that, the Playdoit importer resolves `league`
+  automatically for any future ticket with the same champId.
+  """
+  league = db.query(models.League).filter(models.League.id == league_id).first()
+  if not league:
+      raise HTTPException(status_code=404, detail="League not found")
+
+  existing = db.query(models.League).filter(
+      models.League.playdoit_champ_id == playdoit_champ_id,
+      models.League.id != league_id,
+  ).first()
+  if existing:
+      raise HTTPException(
+          status_code=409,
+          detail=f"playdoit_champ_id {playdoit_champ_id} is already linked to league {existing.id} ({existing.name})",
+      )
+
+  league.playdoit_champ_id = playdoit_champ_id
+  db.commit()
+  db.refresh(league)
+
+  # Backfill: tickets already imported from Playdoit with this same champId
+  # were stuck with league=None (resolution only runs at import time).
+  # Without this, linking a league would only fix future imports, not the
+  # ones already saved.
+  tickets = db.query(models.BettingTicket).filter(
+      models.BettingTicket.ticket_id.like('playdoit:%')
+  ).all()
+  backfilled = 0
+  for t in tickets:
+      if not t.legs:
+          continue
+      changed = False
+      for leg in t.legs:
+          if leg.get('champ_id') == playdoit_champ_id and not leg.get('league'):
+              leg['league'] = league.name
+              changed = True
+      if changed:
+          flag_modified(t, 'legs')
+          if t.bet_type != 'parlay':
+              t.league = league.name
+          backfilled += 1
+  if backfilled:
+      db.commit()
+      print(f"[LEAGUES] Backfill: {backfilled} ticket(s) updated with champId {playdoit_champ_id} -> {league.name}")
+
   return league
 
 @router.get("/favorite-leagues", response_model=List[LeagueOut])
@@ -137,7 +191,8 @@ def save_league_to_db(db: Session, api_response: list):
                 type=league_data.get("type"),
                 logo=league_data.get("logo"),
                 country_id=db_country.id,
-                is_favorite=False
+                is_favorite=False,
+                sport="futbol",
             )
             db.add(db_league)
 

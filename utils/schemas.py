@@ -43,8 +43,10 @@ class LeagueOut(BaseModel):
     type: str
     logo: str
     is_favorite: bool
-    country_id: int
-    country: Optional[CountryBase] = None 
+    country_id: Optional[int] = None
+    country: Optional[CountryBase] = None
+    sport: Optional[str] = None
+    playdoit_champ_id: Optional[int] = None
 
     class Config:
         from_attributes = True
