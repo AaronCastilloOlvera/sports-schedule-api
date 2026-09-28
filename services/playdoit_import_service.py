@@ -35,6 +35,7 @@ _STATUS_MAP = {
     8: 'push',
     18: 'push',
 }
+_FINAL_STATUSES = ('won', 'lost', 'push')
 
 # Altenar bet.device -> device_type. Confirmed with 2 real tickets.
 _DEVICE_MAP = {
@@ -42,16 +43,20 @@ _DEVICE_MAP = {
     1: 'mobile',
 }
 
-def _classify_bet_type(selections: list) -> str:
-    """
-    simple / crear_apuesta / parlay, based only on raw Playdoit data.
-    Altenar's own bet.type calls both a normal bet and a BetBuilder
-    "simple" (both are 1 selection) -- we want to tell them apart:
-      - more than 1 selection            -> parlay (different games combined)
-      - 1 selection and it's a BetBuilder -> crear_apuesta (several markets
-        from the SAME game combined into one pick, `isBetBuilder: true`)
-      - 1 normal selection                -> simple
-    """
+
+# Altenar bet.type codes confirmed with real tickets so far: 0=simple,
+# 1=combo (used for BOTH cross-game parlays and single-selection
+# BetBuilders -- Altenar doesn't tell them apart, we do via isBetBuilder
+# below), 3=teaser (confirmed: same-game handicap+total, totalOdds LOWER
+# than price1*price2, a real line adjustment).
+_BET_TYPE_TEASER = 3
+
+
+def _classify_bet_type(bet_type_code, selections: list) -> str:
+    """simple / crear_apuesta / parlay / teaser, based only on raw Playdoit
+    data (see the bet.type codes above and `isBetBuilder` per selection)."""
+    if bet_type_code == _BET_TYPE_TEASER:
+        return 'teaser'
     if len(selections) > 1:
         return 'parlay'
     if selections and selections[0].get('isBetBuilder'):
@@ -135,9 +140,6 @@ def _build_leg(sel: dict, champ_catalog: dict) -> dict:
     }
 
 
-_FINAL_STATUSES = ('won', 'lost', 'push')
-
-
 class PlaydoitImportService:
     """
     Imports tickets from Playdoit (Altenar), replacing manual capture via
@@ -211,16 +213,12 @@ class PlaydoitImportService:
         selections = bet['selections']
         legs = [_build_leg(s, champ_catalog) for s in selections]
 
-        bet_type = _classify_bet_type(selections)
+        bet_type = _classify_bet_type(bet.get('type'), selections)
 
-        # Ticket-level `league` is only unambiguous for simple/crear_apuesta
-        # (one real game). A parlay can span several games/leagues --
-        # forcing a single league onto it (even "the one with best odds")
-        # would skew any later per-league analysis, so it stays None on
-        # purpose. Per-league breakdown of a parlay should use the legs
-        # (each leg already has its own resolved `league`), not the ticket.
+        # Only set if every leg agrees on one league -- forcing a single
+        # league onto a multi-league bet would skew per-league stats.
         leagues_resolved = list(dict.fromkeys(l['league'] for l in legs if l.get('league')))
-        league = None if bet_type == 'parlay' else (leagues_resolved[0] if leagues_resolved else None)
+        league = leagues_resolved[0] if len(leagues_resolved) == 1 else None
 
         event_names = list(dict.fromkeys(s.get('eventName') for s in selections if s.get('eventName')))
         event_dates = sorted(d for d in (s.get('eventDate') for s in selections) if d)
