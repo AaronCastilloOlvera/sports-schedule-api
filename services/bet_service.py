@@ -77,13 +77,14 @@ class BetService:
     EMPTY = {
         'accumulated_data': [], 'daily_data': [], 'win_loss_counts': {'won': 0, 'lost': 0, 'push': 0},
         'sport_data': [], 'league_data': [], 'bet_type_data': [], 'odds_bucket_data': [],
-        'studied_data': [], 'day_of_week_data': [], 'time_of_day_data': [], 'daily_count_profit': [],
+        'market_data': [], 'device_data': [], 'day_of_week_data': [], 'time_of_day_data': [],
+        'daily_count_profit': [],
         'summary': {'best_day': None, 'best_bet_profit': None, 'streak': 0, 'streak_type': None, 'avg_odds': 0},
     }
 
     rows = self.db.execute(text("""
         SELECT sport, league, odds, stake, net_profit, status,
-               match_datetime, bet_type, studied
+               match_datetime, bet_type, device_type, legs
         FROM betting_tickets
         WHERE status IN ('won','lost','push') AND match_datetime IS NOT NULL
         ORDER BY match_datetime
@@ -144,16 +145,26 @@ class BetService:
                    'roi': round(v['p']/v['s']*100, 1) if v['s'] else 0,
                    'count': v['n']} for k, v in sm.items()]
 
-    # league_data (top 10 by profit)
+    # league_data — win rate by league, from legs (ticket.league is None for
+    # multi-league parlays/teasers by design). Falls back to the ticket
+    # itself when there's no legs array (old Telegram-bot simple bets).
     lm: dict = {}
+    def _bump_league(key, won):
+        if key not in lm: lm[key] = {'w': 0, 'l': 0, 'n': 0}
+        lm[key]['n'] += 1
+        if won is True: lm[key]['w'] += 1
+        elif won is False: lm[key]['l'] += 1
     for r in rows:
-        k = r.league or 'Unknown'
-        if k not in lm: lm[k] = {'p': 0.0, 'n': 0, 's': 0.0}
-        lm[k]['p'] += float(r.net_profit or 0); lm[k]['s'] += float(r.stake or 0); lm[k]['n'] += 1
+        if r.legs:
+            for leg in r.legs:
+                if leg.get('league'):
+                    _bump_league(leg['league'], leg.get('outcome'))
+        elif r.league:
+            _bump_league(r.league, r.status == 'won' if r.status in ('won', 'lost') else None)
     league_data = sorted(
-        [{'league': k, 'profit': round(v['p'], 2), 'roi': round(v['p']/v['s']*100, 1) if v['s'] else 0, 'count': v['n']}
+        [{'league': k, 'winRate': round(v['w']/(v['w']+v['l'])*100, 1) if (v['w']+v['l']) else 0, 'count': v['n']}
          for k, v in lm.items()],
-        key=lambda x: -x['profit'])
+        key=lambda x: -x['count'])
 
     # bet_type_data
     bm: dict = {}
@@ -181,16 +192,35 @@ class BetService:
                          'count': ob[lbl]['n']}
                         for lbl, _, _ in ODDS_BUCKETS if ob[lbl]['n'] > 0]
 
-    # studied_data
-    st: dict = {'Studied': {'p': 0.0, 'w': 0, 'n': 0}, 'Not Studied': {'p': 0.0, 'w': 0, 'n': 0}}
+    # market_data — win rate by market, from legs (same reasoning as
+    # league_data). Top 15 by sample size to keep the chart readable.
+    mkm: dict = {}
     for r in rows:
-        k = 'Studied' if r.studied else 'Not Studied'
-        st[k]['p'] += float(r.net_profit or 0); st[k]['n'] += 1
-        if r.status == 'won': st[k]['w'] += 1
-    studied_data = [{'label': k, 'profit': round(v['p'], 2),
-                     'winRate': round(v['w']/v['n']*100, 1) if v['n'] else 0,
-                     'count': v['n']}
-                    for k, v in st.items() if v['n'] > 0]
+        if not r.legs: continue
+        for leg in r.legs:
+            name = leg.get('market_name_raw') or leg.get('market')
+            if not name: continue
+            if name not in mkm: mkm[name] = {'w': 0, 'l': 0, 'n': 0}
+            mkm[name]['n'] += 1
+            outcome = leg.get('outcome')
+            if outcome is True: mkm[name]['w'] += 1
+            elif outcome is False: mkm[name]['l'] += 1
+    market_data = sorted(
+        [{'market': k, 'winRate': round(v['w']/(v['w']+v['l'])*100, 1) if (v['w']+v['l']) else 0, 'count': v['n']}
+         for k, v in mkm.items()],
+        key=lambda x: -x['count'])[:15]
+
+    # device_data — Mobile vs Desktop, ticket-level. Only Playdoit sets this.
+    dv: dict = {'mobile': {'p': 0.0, 'w': 0, 'n': 0}, 'desktop': {'p': 0.0, 'w': 0, 'n': 0}}
+    for r in rows:
+        k = r.device_type
+        if k not in dv: continue
+        dv[k]['p'] += float(r.net_profit or 0); dv[k]['n'] += 1
+        if r.status == 'won': dv[k]['w'] += 1
+    device_data = [{'label': k.capitalize(), 'profit': round(v['p'], 2),
+                    'winRate': round(v['w']/v['n']*100, 1) if v['n'] else 0,
+                    'count': v['n']}
+                   for k, v in dv.items() if v['n'] > 0]
 
     # day_of_week_data
     dm: dict = {}
@@ -250,7 +280,8 @@ class BetService:
         'league_data':        league_data,
         'bet_type_data':      bet_type_data,
         'odds_bucket_data':   odds_bucket_data,
-        'studied_data':       studied_data,
+        'market_data':        market_data,
+        'device_data':        device_data,
         'day_of_week_data':   day_of_week_data,
         'time_of_day_data':   time_of_day_data,
         'daily_count_profit': daily_count_profit,
