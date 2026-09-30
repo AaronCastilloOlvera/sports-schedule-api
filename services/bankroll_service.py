@@ -51,11 +51,14 @@ class BankrollService:
             "push_count":        tk.push_count,
         }
 
-    def get_transactions(self, page: int = 0, limit: int = 10):
+    def get_transactions(self, page: int = 0, limit: int = 10, types: list[str] | None = None):
         offset = page * limit
-        total = self.db.query(BankrollTransaction).count()
+        query = self.db.query(BankrollTransaction)
+        if types:
+            query = query.filter(BankrollTransaction.type.in_(types))
+        total = query.count()
         rows  = (
-            self.db.query(BankrollTransaction)
+            query
             .order_by(BankrollTransaction.date.desc())
             .offset(offset)
             .limit(limit)

@@ -17,9 +17,10 @@ def get_chart_data(db: Session = Depends(database.get_db)):
 def get_transactions(
     page:  int = Query(0,  ge=0),
     limit: int = Query(10, ge=1, le=100),
+    types: list[str] | None = Query(None),
     db: Session = Depends(database.get_db),
 ):
-    return BankrollService(db).get_transactions(page=page, limit=limit)
+    return BankrollService(db).get_transactions(page=page, limit=limit, types=types)
 
 @router.post("/transactions", response_model=schemas.BankrollTransaction)
 def create_transaction(tx: schemas.BankrollTransactionCreate, db: Session = Depends(database.get_db)):
