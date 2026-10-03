@@ -25,13 +25,14 @@ def read_betting_tickets(
     limit:  int = Query(10, ge=1, le=100),
     search: str = Query(''),
     league: str = Query(''),
+    date:   str = Query(None, description="YYYY-MM-DD, filters by match_datetime's calendar day"),
     db: Session = Depends(database.get_db),
 ):
-  return BetService(db).get_tickets_paginated(page=page, limit=limit, search=search, league=league)
+  return BetService(db).get_tickets_paginated(page=page, limit=limit, search=search, league=league, date=date)
 
 @router.get("/stats")
-def get_bets_stats(league: str = Query(''), db: Session = Depends(database.get_db)):
-  return BetService(db).get_stats(league=league)
+def get_bets_stats(league: str = Query(''), date: str = Query(None), db: Session = Depends(database.get_db)):
+  return BetService(db).get_stats(league=league, date=date)
 
 @router.get("/analytics")
 def get_bets_analytics(db: Session = Depends(database.get_db)):

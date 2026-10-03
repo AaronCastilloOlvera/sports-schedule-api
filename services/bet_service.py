@@ -1,14 +1,24 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from fastapi import UploadFile
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import models
 import os
+
+MX = ZoneInfo('America/Mexico_City')
 
 class BetService:
 
   def __init__(self, db: Session):
     self.db = db
     self.folder = "tickets_images"
+
+  @staticmethod
+  def _day_bounds(date_str: str):
+    """UTC [start, end) bounds for one calendar day in America/Mexico_City."""
+    start = datetime.strptime(date_str, '%Y-%m-%d').replace(tzinfo=MX)
+    return start, start + timedelta(days=1)
 
   def get_tickets(self):
     return self.db.query(models.BettingTicket).order_by(models.BettingTicket.ticket_id.desc()).all()
@@ -21,12 +31,15 @@ class BetService:
     """), {'sport': sport}).fetchall()
     return [r.league for r in rows]
 
-  def get_tickets_paginated(self, page: int = 0, limit: int = 10, search: str = '', league: str = ''):
+  def get_tickets_paginated(self, page: int = 0, limit: int = 10, search: str = '', league: str = '', date: str = None):
     query = self.db.query(models.BettingTicket)
     if search:
       query = query.filter(models.BettingTicket.ticket_id.ilike(f'%{search}%'))
     if league:
       query = query.filter(models.BettingTicket.league == league)
+    if date:
+      start, end = self._day_bounds(date)
+      query = query.filter(models.BettingTicket.match_datetime >= start, models.BettingTicket.match_datetime < end)
     total = query.count()
     data  = (query
              .order_by(models.BettingTicket.match_datetime.desc())
@@ -35,8 +48,15 @@ class BetService:
              .all())
     return {'total': total, 'page': page, 'limit': limit, 'data': data}
 
-  def get_stats(self, league: str = ''):
-    where = "WHERE league = :league" if league else ""
+  def get_stats(self, league: str = '', date: str = None):
+    clauses, params = [], {}
+    if league:
+      clauses.append("league = :league")
+      params['league'] = league
+    if date:
+      params['date_start'], params['date_end'] = self._day_bounds(date)
+      clauses.append("match_datetime >= :date_start AND match_datetime < :date_end")
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     row = self.db.execute(text(f"""
         SELECT
             COUNT(*)                                                             AS total,
@@ -46,7 +66,7 @@ class BetService:
             COALESCE(SUM(stake), 0)                                              AS total_staked,
             COALESCE(AVG(CASE WHEN odds > 0 THEN odds END), 0)                   AS avg_odds
         FROM betting_tickets {where}
-    """), {'league': league} if league else {}).fetchone()
+    """), params).fetchone()
     won_or_lost = int(row.won_or_lost)
     return {
         'total':        int(row.total),
@@ -57,9 +77,6 @@ class BetService:
     }
 
   def get_analytics(self):
-    from zoneinfo import ZoneInfo
-    MX = ZoneInfo('America/Mexico_City')
-
     ODDS_BUCKETS = [
         ('1.00-1.50', 1.00, 1.50),
         ('1.50-2.00', 1.50, 2.00),
