@@ -179,9 +179,10 @@ class BetService:
         elif r.league:
             _bump_league(r.league, r.status == 'won' if r.status in ('won', 'lost') else None)
     league_data = sorted(
-        [{'league': k, 'winRate': round(v['w']/(v['w']+v['l'])*100, 1) if (v['w']+v['l']) else 0, 'count': v['n']}
+        [{'league': k, 'winRate': round(v['w']/(v['w']+v['l'])*100, 1) if (v['w']+v['l']) else 0,
+          'wins': v['w'], 'decided': v['w'] + v['l'], 'count': v['n']}
          for k, v in lm.items()],
-        key=lambda x: -x['count'])
+        key=lambda x: -x['winRate'])
 
     # bet_type_data
     bm: dict = {}
