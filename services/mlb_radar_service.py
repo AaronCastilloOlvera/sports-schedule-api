@@ -1,31 +1,40 @@
 """
-MLB Radar — motor de picks de béisbol (MLB / LMB).
+MLB Radar — motor de picks de béisbol (MLB only).
 
-Redis-only por diseño: statsapi.mlb.com es gratuita, sin autenticación y sin
-cuota práctica, así que re-consultar historia no cuesta nada. No hay tablas,
-modelos ni migraciones asociadas a este módulo.
+Redis-only por diseño: ESPN es gratuita y sin cuota práctica. MLB only — LMB
+se retiró (ESPN no la cubre), trade-off aceptado explícitamente.
 
 Claves Redis que este servicio posee (nadie más escribe en ellas):
 
-  mlb:day:{league}:{YYYY-MM-DD}        30 d  schedule + linescore recortado del día
-  mlb:gamelog:{league}:{pid}:{season}  12 h  splits crudos del game log del pitcher
-  mlb:pitcher:{league}:{pid}:{date}     2 d  perfil derivado (últimos 10 + vs rival)
-  mlb:venue_tz:{venue_id}             180 d  IANA tz id del estadio (no cambia)
-  mlb_radar:{league}:{YYYY-MM-DD}      30 d  picks calculados del día
-  mlb_radar:accuracy:{league}:{...}     1 h  respuesta de get_accuracy
+  mlb:day:{YYYY-MM-DD}        30 d  schedule compacto del día (ESPN scoreboard
+                                     + summary/pickcenter solo para el slate
+                                     de "hoy")
+  mlb:gamelog:{pid}:{season}  12 h  respuesta cruda del gamelog ESPN del pitcher
+  mlb:pitcher:{pid}:{date}     2 d  perfil derivado (últimas 10 + vs rival)
+  mlb_radar:{YYYY-MM-DD}      30 d  picks calculados del día
+  mlb_radar:accuracy:{...}     1 h  respuesta de get_accuracy
 
-Todos los picks salen con la forma del feed de fútbol:
+Ya no hay `mlb:venue_tz:*` — la zona horaria del estadio es una tabla estática
+(`MLBApiClient.TEAM_TIMEZONES`), no una llamada de red cacheada.
+
+Todos los picks salen con la forma del feed de fútbol/NFL:
   {market, label, note, confidence, side, line, samples, odd}
-`odd` siempre es None — no existe fuente de momios para MLB.
+`odd` lleva el momio DECIMAL real de DraftKings para `moneyline` y `total`
+(vía `utils/odds.py:normalize_odds`); `nrfi` y `hits` no tienen mercado
+equivalente en el casino y siempre salen con `odd: None`.
 """
 import json
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytz
 
-from services.mlb_api_client import MLBApiClient, LEAGUES, POSTSEASON_GAME_TYPES
+from services.mlb_api_client import MLBApiClient
+from utils.odds import normalize_odds
+
+REQUEST_SLEEP = 0.3  # ESPN endpoint no es oficial — mismo respeto que NFL/NBA Radar
 
 # ── TTLs ──────────────────────────────────────────────────────────────────────
 DAY_TTL      = 30 * 24 * 3600   # 30 d — un día pasado es inmutable
@@ -33,7 +42,6 @@ GAMELOG_TTL  = 12 * 3600        # 12 h — aparece una línea nueva cada ~5 día
 PITCHER_TTL  = 2 * 24 * 3600    # 2 d  — perfil derivado, se recalcula cada noche
 PICKS_TTL    = 30 * 24 * 3600   # 30 d — necesario para medir accuracy después
 ACCURACY_TTL = 3600             # 1 h
-VENUE_TZ_TTL = 180 * 24 * 3600  # 180 d — la tz de un estadio no cambia
 
 # ── Líneas fijas de casa de apuestas ──────────────────────────────────────────
 # NUNCA se eligen a partir de nuestra propia proyección: se eligen por cercanía
@@ -65,11 +73,11 @@ PARK_CLAMP     = (0.85, 1.15)
 # `_compute_dow_multipliers()` de fútbol: no hay categoría aparte de
 # entre-semana/fin-de-semana, el efecto de fin de semana ya queda capturado en
 # los multiplicadores de sábado/domingo. Franja horaria calculada en hora LOCAL
-# del estadio (vía `MLBApiClient.get_venue_timezone`) para no mezclar las 4
-# zonas horarias de EEUU en un solo corte UTC.
+# del estadio (vía `MLBApiClient.get_team_timezone`, tabla estática) para no
+# mezclar las 4 zonas horarias de EEUU en un solo corte UTC.
 DOW_MIN_SAMPLE = 30
 TIME_BUCKETS = ('day', 'afternoon', 'evening')  # <15:00 / 15:00-18:00 / 18:00+ local
-DEFAULT_VENUE_TZ = 'America/New_York'     # fallback si la API no resuelve la tz
+DEFAULT_VENUE_TZ = 'America/New_York'     # fallback si el abbr no está en la tabla
 
 # ── Pesos del modelo ──────────────────────────────────────────────────────────
 ML_W_TEAM       = 0.80   # diferencial de fuerza de equipo
@@ -136,7 +144,9 @@ def _outs_of(stat: dict) -> int:
     """Outs registrados en la apertura.
 
     `stat['outs']` viene directo. Fallback: `inningsPitched` es un STRING tipo
-    "5.2" donde el decimal son TERCIOS (5 y 2/3), no décimas.
+    "5.2" donde el decimal son TERCIOS (5 y 2/3), no décimas. ESPN's gamelog
+    `IP` field usa la misma convención ("5.1", "5.2"), así que esta función
+    sigue funcionando sin cambios con el nuevo cliente.
     """
     if stat.get('outs') is not None:
         try:
@@ -154,52 +164,203 @@ def _outs_of(stat: dict) -> int:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Normalización de la caché diaria
+#  Normalización de la caché diaria — ESPN scoreboard/summary
 # ══════════════════════════════════════════════════════════════════════════════
 
-def compact_game(g: dict) -> dict:
-    """Recorta un juego del schedule a lo único que el motor necesita."""
-    teams = g.get('teams') or {}
-    ls    = g.get('linescore') or {}
-    innings = ls.get('innings') or []
-    first   = innings[0] if innings else {}
-    ls_teams = ls.get('teams') or {}
+def extract_odds(summary: dict) -> dict | None:
+    """DraftKings `pickcenter` odds, mismo patrón que `nfl_radar_service.extract_odds`.
+    Solo moneyline + total -- el motor no proyecta spread/run-line."""
+    pc = summary.get('pickcenter') or []
+    if not pc:
+        return None
+    entry = next((p for p in pc if (p.get('provider') or {}).get('name') == 'DraftKings'), pc[0])
+    home = entry.get('homeTeamOdds') or {}
+    away = entry.get('awayTeamOdds') or {}
+    odds = {
+        'provider':   (entry.get('provider') or {}).get('name'),
+        'over_under': entry.get('overUnder'),
+        'over_odds':  entry.get('overOdds'),    # American
+        'under_odds': entry.get('underOdds'),   # American
+        'home_ml':    home.get('moneyLine'),    # American
+        'away_ml':    away.get('moneyLine'),    # American
+    }
+    if all(v is None for k, v in odds.items() if k != 'provider'):
+        return None
+    return odds
 
-    def side(key):
-        t  = teams.get(key) or {}
-        tm = t.get('team') or {}
-        pp = t.get('probablePitcher') or {}
-        rec = t.get('leagueRecord') or {}
-        lst = ls_teams.get(key) or {}
-        return {
-            'id': tm.get('id'),
-            'name': tm.get('name'),
-            'score': t.get('score'),
-            'hits': lst.get('hits'),
-            'wins': rec.get('wins'),
-            'losses': rec.get('losses'),
-            'pitcher_id': pp.get('id'),
-            'pitcher_name': pp.get('fullName'),
-            'first_inning_runs': (first.get(key) or {}).get('runs'),
-        }
 
-    venue = g.get('venue') or {}
+def _num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stat_value(stats_list, name):
+    for s in stats_list or []:
+        if s.get('name') == name:
+            return s.get('displayValue')
+    return None
+
+
+def _record_summary(records):
+    for rec in records or []:
+        if rec.get('type') == 'total' or rec.get('name') == 'overall':
+            return rec.get('summary')
+    return None
+
+
+def _side_from_competitor(c: dict) -> dict:
+    team = c.get('team') or {}
+    score = c.get('score')
+    try:
+        score = int(score) if score not in (None, '') else None
+    except (TypeError, ValueError):
+        score = None
+
+    hits_raw = _stat_value(c.get('statistics'), 'hits')
+    hits = int(_num(hits_raw)) if _num(hits_raw) is not None else None
+
+    wl = _record_summary(c.get('records'))
+    wins = losses = None
+    if wl and '-' in wl:
+        try:
+            wins, losses = (int(x) for x in wl.split('-', 1))
+        except ValueError:
+            pass
+
+    probables = c.get('probables') or []
+    probable = probables[0] if probables else {}
+    athlete = probable.get('athlete') or {}
+
+    linescores = c.get('linescores') or []
+    first = next((ls for ls in linescores if ls.get('period') == 1), None)
+    first_inning_runs = None
+    if first is not None:
+        fv = _num(first.get('value'))
+        first_inning_runs = int(fv) if fv is not None else None
+
     return {
-        'gamePk': g.get('gamePk'),
-        'date': g.get('officialDate') or (g.get('gameDate') or '')[:10],
-        'gameDate': g.get('gameDate'),
-        'gameType': g.get('gameType'),
-        'state': (g.get('status') or {}).get('detailedState'),
-        'venue_id': venue.get('id'),
-        'venue_name': venue.get('name'),
-        'innings_played': len(innings),
-        'home': side('home'),
-        'away': side('away'),
+        'id': team.get('id'),
+        'name': team.get('displayName'),
+        'abbr': team.get('abbreviation'),
+        'score': score,
+        'hits': hits,
+        'wins': wins,
+        'losses': losses,
+        'pitcher_id': athlete.get('id'),
+        'pitcher_name': athlete.get('fullName'),
+        'first_inning_runs': first_inning_runs,
+    }
+
+
+def compact_game(event: dict, request_date: str, summary: dict | None = None) -> dict:
+    """Recorta un evento del scoreboard (+ summary opcional, solo para odds).
+    `request_date` se usa tal cual para 'date' en vez del timestamp UTC del
+    evento -- un juego nocturno en la costa oeste puede caer en el día
+    siguiente en UTC. `gameDate` sí guarda el timestamp completo para la hora local."""
+    comp = (event.get('competitions') or [{}])[0]
+    status = comp.get('status') or event.get('status') or {}
+    stype = status.get('type') or {}
+    competitors = comp.get('competitors') or []
+    venue = comp.get('venue') or {}
+
+    home_c = next((c for c in competitors if c.get('homeAway') == 'home'), {}) or {}
+    away_c = next((c for c in competitors if c.get('homeAway') == 'away'), {}) or {}
+    home = _side_from_competitor(home_c)
+    away = _side_from_competitor(away_c)
+
+    innings_played = max(len(home_c.get('linescores') or []), len(away_c.get('linescores') or []))
+
+    odds = extract_odds(summary) if summary else None
+
+    return {
+        'gamePk': event.get('id'),
+        'date': request_date,
+        'gameDate': event.get('date'),
+        'gameType': (event.get('season') or {}).get('type'),
+        'state': 'Final' if stype.get('completed') else (stype.get('description') or stype.get('name')),
+        # Clave de park factor / tz: abbr del equipo LOCAL, no el id numérico
+        # de venue de ESPN -- ESPN no expone tz/coordenadas por venue, así que
+        # se usa la tabla estática de MLBApiClient keyed by team abbreviation
+        # (home team == home venue 1:1).
+        'venue_id': home.get('abbr'),
+        'venue_name': venue.get('fullName'),
+        'innings_played': innings_played,
+        'home': home,
+        'away': away,
+        'odds': odds,
     }
 
 
 def is_final(game: dict) -> bool:
     return game.get('state') in FINAL_STATES and game['home'].get('score') is not None
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Pitcher gamelog — ESPN's positional `stats` + separate `events` metadata
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _gamelog_stat_row(labels: list, stats: list) -> dict:
+    """Alinea el array posicional `stats` de ESPN contra `labels` y devuelve
+    las mismas claves que `build_pitcher_profile()` ya esperaba de MLB Stats API."""
+    row = dict(zip(labels, stats))
+    dec = row.get('Dec') or ''
+    return {
+        # ESPN no expone flag de "titular" -- como solo se perfilan abridores
+        # anunciados, cada arranque de ESE pitcher se trata como titular.
+        'gamesStarted': 1,
+        'inningsPitched': row.get('IP'),
+        'hits': int(_num(row.get('H')) or 0),
+        'runs': int(_num(row.get('R')) or 0),
+        'earnedRuns': int(_num(row.get('ER')) or 0),
+        'strikeOuts': int(_num(row.get('K')) or 0),
+        'baseOnBalls': int(_num(row.get('BB')) or 0),
+        'isWin': dec.startswith('W'),
+    }
+
+
+def build_espn_pitcher_splits(gamelog: dict, game_index: dict) -> list:
+    """Convierte el gamelog crudo de ESPN al shape 'split' que
+    `build_pitcher_profile()` espera. Solo temporada regular. La fecha se
+    resuelve contra `game_index` primero; si el juego no está en esa ventana,
+    cae al timestamp UTC del propio gamelog."""
+    labels = gamelog.get('labels') or []
+    events_meta = gamelog.get('events') or {}
+    seen, splits = set(), []
+
+    for st in gamelog.get('seasonTypes') or []:
+        if 'regular' not in (st.get('displayName') or '').lower():
+            continue
+        for cat in st.get('categories') or []:
+            for ev in cat.get('events') or []:
+                eid = ev.get('eventId')
+                if not eid or eid in seen:
+                    continue
+                seen.add(eid)
+                meta = events_meta.get(eid) or {}
+                if not meta:
+                    continue
+
+                team_id = (meta.get('team') or {}).get('id')
+                home_id = meta.get('homeTeamId')
+
+                cached = game_index.get(eid)
+                date = cached.get('date') if cached else None
+                if not date:
+                    date = (meta.get('gameDate') or '')[:10]
+                if not date:
+                    continue
+
+                splits.append({
+                    'date': date,
+                    'isHome': team_id is not None and team_id == home_id,
+                    'opponent': {'id': (meta.get('opponent') or {}).get('id')},
+                    'game': {'gamePk': eid},
+                    'isWin': (meta.get('gameResult') or '') == 'W',
+                    'stat': _gamelog_stat_row(labels, ev.get('stats') or []),
+                })
+    return splits
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -409,13 +570,13 @@ def build_team_context(day_games: list, as_of: str) -> dict:
 def build_pitcher_profile(splits: list, as_of: str, opponent_id: int | None,
                           game_index: dict) -> dict | None:
     """
-    Convierte el game log crudo en el perfil que consume el motor.
+    Convierte el game log ya normalizado (ver `build_espn_pitcher_splits`) en
+    el perfil que consume el motor. Sin cambios respecto a MLB Stats API --
+    el contrato de entrada (`splits`) es idéntico.
 
     - Solo aperturas (`gamesStarted == 1`) con fecha ESTRICTAMENTE anterior a
-      `as_of`. Una sola llamada al game log cubre tanto "últimas 10 aperturas"
-      como "historial vs este rival": son dos filtros sobre la misma respuesta.
-    - De-dupe por `game.gamePk` (la API emite un split 'P' agregado duplicado
-      por juego de postemporada).
+      `as_of`.
+    - De-dupe por `game.gamePk`.
     - El primer inning NO está en el game log: se obtiene cruzando el gamePk
       contra la caché diaria.
     """
@@ -502,25 +663,39 @@ def build_pitcher_profile(splits: list, as_of: str, opponent_id: int | None,
 # ══════════════════════════════════════════════════════════════════════════════
 
 class MLBRadarService:
-    def __init__(self, redis_client=None, league: str = 'mlb'):
+    def __init__(self, redis_client=None):
         self.r = redis_client
-        self.league = league if league in LEAGUES else 'mlb'
         self.client = MLBApiClient()
         self.local_tz = pytz.timezone('America/Mexico_City')
 
     # ── caché diaria ──────────────────────────────────────────────────────────
 
     def day_key(self, date: str) -> str:
-        return f'mlb:day:{self.league}:{date}'
+        return f'mlb:day:{date}'
 
-    def get_day(self, date: str, force_refresh: bool = False) -> list:
-        """Schedule compacto del día. Pasado = inmutable ⇒ TTL largo."""
+    def get_day(self, date: str, force_refresh: bool = False, fetch_odds: bool = False) -> list:
+        """Schedule compacto del día. Pasado = inmutable ⇒ TTL largo.
+        `fetch_odds=True` pide el summary extra por juego (pickcenter) -- solo
+        lo necesita el slate de "hoy", nunca la ventana histórica."""
         key = self.day_key(date)
         if self.r and not force_refresh:
             cached = self.r.get(key)
             if cached:
                 return json.loads(cached)
-        games = [compact_game(g) for g in self.client.get_schedule(date, self.league)]
+
+        data = self.client.get_scoreboard(date.replace('-', ''))
+        events = data.get('events') or []
+
+        games = []
+        for ev in events:
+            summary = None
+            if fetch_odds:
+                eid = ev.get('id')
+                if eid:
+                    time.sleep(REQUEST_SLEEP)
+                    summary = self.client.get_summary(eid)
+            games.append(compact_game(ev, date, summary))
+
         if self.r and games:
             self.r.setex(key, DAY_TTL, json.dumps(games))
         return games
@@ -536,47 +711,39 @@ class MLBRadarService:
 
     # ── game logs ─────────────────────────────────────────────────────────────
 
-    def get_game_log(self, pitcher_id: int, season: int) -> list:
-        key = f'mlb:gamelog:{self.league}:{pitcher_id}:{season}'
+    def get_game_log(self, pitcher_id: int, season: int) -> dict:
+        """Respuesta cruda del gamelog ESPN (sin normalizar) -- ver
+        `build_espn_pitcher_splits` para la conversión al shape del motor."""
+        key = f'mlb:gamelog:{pitcher_id}:{season}'
         if self.r:
             cached = self.r.get(key)
             if cached:
                 return json.loads(cached)
-        game_types = POSTSEASON_GAME_TYPES if self.league == 'lmb' else None
-        splits = self.client.get_person_game_log(pitcher_id, self.league, [season], game_types)
-        if self.r and splits:
-            self.r.setex(key, GAMELOG_TTL, json.dumps(splits))
-        return splits
+        raw = self.client.get_pitcher_gamelog(pitcher_id, season)
+        if self.r and raw:
+            self.r.setex(key, GAMELOG_TTL, json.dumps(raw))
+        return raw
 
     # ── zona horaria de estadios ──────────────────────────────────────────────
 
-    def get_venue_tz(self, venue_id: int) -> str:
-        if not venue_id:
-            return DEFAULT_VENUE_TZ
-        key = f'mlb:venue_tz:{venue_id}'
-        if self.r:
-            cached = self.r.get(key)
-            if cached:
-                return cached
-        tz = self.client.get_venue_timezone(venue_id) or DEFAULT_VENUE_TZ
-        if self.r:
-            self.r.setex(key, VENUE_TZ_TTL, tz)
-        return tz
+    def get_venue_tz(self, team_abbr: str) -> str:
+        return self.client.get_team_timezone(team_abbr) or DEFAULT_VENUE_TZ
 
     def build_venue_tz_lookup(self, games: list) -> dict:
-        """{venue_id: tz IANA} de todos los estadios distintos en `games`."""
-        venue_ids = {g.get('venue_id') for g in games if g.get('venue_id')}
-        return {vid: self.get_venue_tz(vid) for vid in venue_ids}
+        """{abbr equipo local: tz IANA} de todos los estadios distintos en `games`."""
+        abbrs = {g.get('venue_id') for g in games if g.get('venue_id')}
+        return {a: self.get_venue_tz(a) for a in abbrs}
 
     # ── público ───────────────────────────────────────────────────────────────
 
     def get_suggestions(self, date: str, history_days: int = 60,
                         refresh_last: int = 3) -> dict:
         """
-        Camino en vivo: refresca la caché del día, carga la ventana histórica,
-        arma perfiles de los abridores anunciados y calcula picks.
+        Camino en vivo: refresca la caché del día (CON odds — es el único
+        slate que genera picks nuevos), carga la ventana histórica, arma
+        perfiles de los abridores anunciados y calcula picks.
         """
-        today = self.get_day(date, force_refresh=True)
+        today = self.get_day(date, force_refresh=True, fetch_odds=True)
         window = self.load_window(
             (datetime.strptime(date, '%Y-%m-%d').date() - timedelta(days=1)).strftime('%Y-%m-%d'),
             history_days, refresh_last=refresh_last,
@@ -584,20 +751,22 @@ class MLBRadarService:
         season = int(date[:4])
 
         profiles = {}
-        game_index = build_game_index(window)
+        game_index = build_game_index(window + today)
         for g in today:
             for s in ('home', 'away'):
                 pid = g[s].get('pitcher_id')
                 opp = g['away' if s == 'home' else 'home'].get('id')
                 if not pid:
                     continue
-                pkey = f'mlb:pitcher:{self.league}:{pid}:{date}'
+                pkey = f'mlb:pitcher:{pid}:{date}'
                 if self.r:
                     cached = self.r.get(pkey)
                     if cached:
                         profiles[(pid, opp)] = json.loads(cached)
                         continue
-                prof = build_pitcher_profile(self.get_game_log(pid, season), date, opp, game_index)
+                raw_log = self.get_game_log(pid, season)
+                splits = build_espn_pitcher_splits(raw_log, game_index)
+                prof = build_pitcher_profile(splits, date, opp, game_index)
                 profiles[(pid, opp)] = prof
                 if self.r and prof:
                     self.r.setex(pkey, PITCHER_TTL, json.dumps(prof))
@@ -633,7 +802,6 @@ class MLBRadarService:
         results.sort(key=lambda x: x['top_picks'][0]['confidence'], reverse=True)
         return {
             'date': date,
-            'league': self.league,
             'games_analyzed': len(games),
             'league_context': {k: (round(v, 3) if isinstance(v, float) else v)
                                for k, v in league_ctx.items()},
@@ -650,6 +818,7 @@ class MLBRadarService:
         ht = team_ctx.get(home.get('id'))
         at = team_ctx.get(away.get('id'))
         pf = park.get(g.get('venue_id'), 1.0)
+        odds = g.get('odds')
 
         dow, bucket = local_dow_and_bucket(g.get('gameDate'), g.get('venue_id'), venue_tz)
         dow_mult  = dow_mults.get(dow, {}) if dow is not None else {}
@@ -658,13 +827,13 @@ class MLBRadarService:
         hits_mult = dow_mult.get('hits', 1.0) * time_mult.get('hits', 1.0)
 
         markets = {}
-        ml = self._analyze_moneyline(home, away, hp, ap, ht, at, league_ctx)
+        ml = self._analyze_moneyline(home, away, hp, ap, ht, at, league_ctx, odds)
         if ml:
             markets['moneyline'] = ml
         nrfi = self._analyze_nrfi(hp, ap, ht, at, league_ctx)
         if nrfi:
             markets['nrfi'] = nrfi
-        total = self._analyze_total(hp, ap, ht, at, league_ctx, pf, runs_mult)
+        total = self._analyze_total(hp, ap, ht, at, league_ctx, pf, runs_mult, odds)
         if total:
             markets['total'] = total
         hits = self._analyze_team_hits(hp, ap, ht, at, league_ctx, pf, hits_mult)
@@ -692,7 +861,7 @@ class MLBRadarService:
 
     # ── mercados ──────────────────────────────────────────────────────────────
 
-    def _analyze_moneyline(self, home, away, hp, ap, ht, at, lg):
+    def _analyze_moneyline(self, home, away, hp, ap, ht, at, lg, odds=None):
         if not (ht and at) or ht['win_rate'] is None or at['win_rate'] is None:
             return None
 
@@ -734,6 +903,16 @@ class MLBRadarService:
             return None
 
         pick = home if side == 'home' else away
+
+        # Momio real de DraftKings -- solo adorna el pick, no participa en la
+        # confianza (eso sigue siendo puramente nuestro modelo, a diferencia
+        # de NFL que sí es edge-vs-mercado).
+        dec_odd = None
+        if odds:
+            raw_odd = odds.get('home_ml') if side == 'home' else odds.get('away_ml')
+            if raw_odd is not None:
+                dec_odd = normalize_odds(raw_odd)
+
         return {
             'side': side, 'line': None, 'confidence': conf,
             'p_home': round(p_home, 3),
@@ -743,6 +922,7 @@ class MLBRadarService:
             'away_sp_ra9': ap['recent']['runs_per_9'] if ap and ap.get('recent') else None,
             'samples': {'home_team': ht['n'], 'away_team': at['n'],
                         'starters': sp_n, 'vs_opponent': vs_n, 'total': n},
+            'odd': dec_odd,
         }
 
     def _analyze_nrfi(self, hp, ap, ht, at, lg):
@@ -790,7 +970,7 @@ class MLBRadarService:
                         'total': n1 + n2},
         }
 
-    def _analyze_total(self, hp, ap, ht, at, lg, park_factor, day_time_mult=1.0):
+    def _analyze_total(self, hp, ap, ht, at, lg, park_factor, day_time_mult=1.0, odds=None):
         if not (ht and at) or ht['runs_per_game'] is None or at['runs_per_game'] is None:
             return None
 
@@ -836,6 +1016,16 @@ class MLBRadarService:
         conf = min(raw, cap)
         if conf < MIN_CONFIDENCE_EMIT:
             return None
+
+        # Solo se adjunta si la línea real de DK coincide con la que elegimos
+        # (de un set fijo, nunca desde nuestra proyección) -- si DK posteó
+        # otro número, el momio es de OTRA línea y mentiría sobre el payout.
+        dec_odd = None
+        if odds and odds.get('over_under') is not None and abs(odds['over_under'] - line) < 1e-6:
+            raw_odd = odds.get('over_odds') if side == 'over' else odds.get('under_odds')
+            if raw_odd is not None:
+                dec_odd = normalize_odds(raw_odd)
+
         return {
             'side': side, 'line': line, 'confidence': conf,
             'projected': round(proj, 2), 'neutral': round(neutral, 2),
@@ -843,6 +1033,7 @@ class MLBRadarService:
             'home_rpg': round(ht['runs_per_game'], 2), 'away_rpg': round(at['runs_per_game'], 2),
             'samples': {'home_team': ht['n'], 'away_team': at['n'],
                         'starters': sp_n, 'total': n},
+            'odd': dec_odd,
         }
 
     def _analyze_team_hits(self, hp, ap, ht, at, lg, park_factor, day_time_mult=1.0):
@@ -850,7 +1041,8 @@ class MLBRadarService:
         Hits combinados del JUEGO (ambos equipos) — no del abridor. El casino del
         usuario no ofrece props de hits por pitcher, así que este mercado predice
         lo que sí es apostable, usando a los abridores como una señal más, igual
-        que TOTAL (carreras) usa su RA/9.
+        que TOTAL (carreras) usa su RA/9. Sin mercado DraftKings equivalente —
+        `odd` siempre None (se omite de este dict, igual que NRFI).
         """
         if not (ht and at) or ht['hits_per_game'] is None or at['hits_per_game'] is None:
             return None
@@ -933,7 +1125,10 @@ class MLBRadarService:
                 'side': d['side'],
                 'line': d.get('line'),
                 'samples': d.get('samples', {}),
-                'odd': None,   # no existe fuente de momios para MLB
+                # moneyline/total: momio decimal real de DraftKings si estaba
+                # disponible y (para total) la línea coincidía. nrfi/hits:
+                # nunca tienen 'odd' en su dict -> None automático.
+                'odd': d.get('odd'),
             })
         picks.sort(key=lambda p: -p['confidence'])
         return picks
@@ -941,20 +1136,22 @@ class MLBRadarService:
     # ══════════════════════════════════════════════════════════════════════════
     #  Accuracy
     # ══════════════════════════════════════════════════════════════════════════
-
     def get_accuracy(self, redis_client=None, days: int = 7, min_confidence: int = 70,
-                     league: str = None, end_date: str = None) -> dict:
+                     end_date: str = None) -> dict:
         """
-        Cruza los picks cacheados (`mlb_radar:{league}:{date}`) contra los
-        resultados reales (`mlb:day:...` + boxscore del abridor). Cachea 1 h.
+        Cruza los picks cacheados (`mlb_radar:{date}`) contra los resultados
+        reales (`mlb:day:...`). Cachea 1 h. Agrega hit rate (como antes) y
+        ROI real usando el momio decimal adjunto a cada pick cuando existe
+        (`moneyline`/`total`) -- mismo patrón que
+        `nfl_radar_service.py:get_accuracy`. `nrfi`/`hits` nunca tienen `odd`,
+        así que no contribuyen a staked/returned (su ROI sale `None`), pero
+        siguen contando normal para accuracy.
         """
         r = redis_client or self.r
-        if league and league in LEAGUES:
-            self.league = league
         end = (datetime.strptime(end_date, '%Y-%m-%d').date() if end_date
                else datetime.now(self.local_tz).date())
 
-        cache_key = f'mlb_radar:accuracy:{self.league}:{end}:{days}:{min_confidence}'
+        cache_key = f'mlb_radar:accuracy:{end}:{days}:{min_confidence}'
         if r:
             cached = r.get(cache_key)
             if cached:
@@ -963,7 +1160,7 @@ class MLBRadarService:
         dates = [(end - timedelta(days=i)).strftime('%Y-%m-%d') for i in range(1, days + 1)]
         picks, found, missing = [], [], []
         for d in dates:
-            raw = r.get(f'mlb_radar:{self.league}:{d}') if r else None
+            raw = r.get(f'mlb_radar:{d}') if r else None
             if not raw:
                 missing.append(d)
                 continue
@@ -978,10 +1175,11 @@ class MLBRadarService:
             for g in self.get_day(d, force_refresh=False):
                 results[g['gamePk']] = g
 
-        by_market = defaultdict(lambda: {'wins': 0, 'losses': 0})
+        by_market = defaultdict(lambda: {'wins': 0, 'losses': 0, 'staked': 0.0, 'returned': 0.0})
         by_band   = defaultdict(lambda: {'wins': 0, 'losses': 0})
         sides     = defaultdict(lambda: defaultdict(int))
         wins = losses = unsettled = 0
+        staked = returned = 0.0
 
         for p in picks:
             outcome = self._evaluate_pick(p, results.get(p['game_pk']))
@@ -994,6 +1192,15 @@ class MLBRadarService:
             bucket = 'wins' if outcome == 'win' else 'losses'
             by_market[p['market']][bucket] += 1
             by_band[band][bucket] += 1
+
+            odd = p.get('odd')
+            if odd:
+                by_market[p['market']]['staked'] += 1.0
+                staked += 1.0
+                if outcome == 'win':
+                    by_market[p['market']]['returned'] += odd
+                    returned += odd
+
             if outcome == 'win':
                 wins += 1
             else:
@@ -1001,14 +1208,16 @@ class MLBRadarService:
 
         settled = wins + losses
         result = {
-            'league': self.league, 'days': days, 'min_confidence': min_confidence,
+            'days': days, 'min_confidence': min_confidence,
             'dates_analyzed': found, 'dates_missing': missing,
             'total_picks': len(picks), 'settled': settled, 'unsettled': unsettled,
             'wins': wins, 'losses': losses,
             'accuracy': round(wins / settled * 100) if settled else None,
+            'roi': round((returned - staked) / staked * 100, 2) if staked else None,
             'by_market': {
                 m: {'wins': v['wins'], 'total': v['wins'] + v['losses'],
-                    'accuracy': round(v['wins'] / (v['wins'] + v['losses']) * 100)}
+                    'accuracy': round(v['wins'] / (v['wins'] + v['losses']) * 100),
+                    'roi': round((v['returned'] - v['staked']) / v['staked'] * 100, 2) if v['staked'] else None}
                 for m, v in by_market.items() if v['wins'] + v['losses']
             },
             'by_confidence_band': {
