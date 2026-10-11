@@ -20,6 +20,7 @@ _SPORT_MAP = {
     76: 'baseball',
     66: 'futbol',
     75: 'american_football',
+    67: 'basketball',
 }
 # No fallback guess here on purpose: showing 'unknown' beats picking the
 # wrong sport. Add new sport ids to the map above as they show up.
