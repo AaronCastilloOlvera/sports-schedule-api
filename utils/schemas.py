@@ -58,6 +58,7 @@ class BettingTicketBase(BaseModel):
     pick: Optional[str] = None
     odds: Optional[float] = None
     stake: Optional[float] = None
+    bonus_stake: Optional[float] = None
     payout: Optional[float] = None
     net_profit: Optional[float] = None
     status: str = "pending"  # 'pending', 'won', 'lost'

@@ -12,6 +12,7 @@ class BettingTicket(Base):
     pick = Column(String)
     odds = Column(Float)
     stake = Column(Float)
+    bonus_stake = Column(Float, nullable=True)  # part of `stake` paid with bonus credit, not real money
     payout = Column(Float)
     net_profit = Column(Float)
     status = Column(String, default="pending") # 'pending', 'won', 'lost'

@@ -227,7 +227,14 @@ class PlaydoitImportService:
 
         status = _map_or_warn(bet.get('status'), _STATUS_MAP, 'pending', 'bet.status')
         stake, payout = bet.get('totalStake'), bet.get('totalWin')
-        net_profit = (payout - stake) if status != 'pending' and stake is not None and payout is not None else None
+        bonus_stake = bet.get('bonusPart') or None
+        # Bonus stake is never returned: totalWin already excludes it, so only the
+        # real-money part of the stake counts. Verified with 100%-bonus won/lost bets.
+        real_stake = (stake or 0) - (bonus_stake or 0)
+        net_profit = (payout - real_stake) if status != 'pending' and stake is not None and payout is not None else None
+        if bonus_stake and (bonus_stake < (stake or 0) or status == 'push'):
+            print(f"[PLAYDOIT] {ticket_id}: unverified bonus case (bonusPart={bonus_stake}, "
+                  f"stake={stake}, status={status}) -- review net_profit by hand")
 
         return {
             'ticket_id': ticket_id,
@@ -236,6 +243,7 @@ class PlaydoitImportService:
             'pick': ' + '.join(l['pick'] for l in legs if l.get('pick')),
             'odds': normalize_odds(bet.get('totalOdds')),
             'stake': stake,
+            'bonus_stake': bonus_stake,
             'payout': payout,
             'net_profit': net_profit,
             'status': status,
