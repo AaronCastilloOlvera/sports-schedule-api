@@ -9,6 +9,8 @@ from sqlalchemy import text, bindparam
 MIN_MATCHES = 4
 MIN_DOW_SAMPLE = 30  # minimum fixtures per weekday to trust DOW multipliers
 FINISHED_STATUSES = ('FT', 'AET', 'PEN')
+VOID_STATUSES = ('PST', 'CANC', 'ABD', 'AWD', 'WO')
+NOT_STARTED_STATUSES = ('NS', 'TBD')
 ACCURACY_TTL = 3600  # 1 h — hit rates only shift as the day's fixtures settle
 
 LINES = {
@@ -39,6 +41,36 @@ MARKET_NOTES = {
     ),
     'btts': lambda m, hn, an: f"Ambos anotan en el {m['confidence']}% de los partidos analizados",
 }
+
+
+def settle_pick(market, side, line, home_goals, away_goals, corners, cards, final):
+    """
+    Single source of truth for grading a pick, live or final.
+    state: won | lost | winning | losing | unknown. won/lost can be decided
+    before full time: an over that crossed its line (or BTTS yes once both
+    scored) can't lose anymore; an under that broke its line can't win.
+    margin = actual - line, i.e. how far over (+) or under (-) the line it landed.
+    """
+    hg, ag = home_goals or 0, away_goals or 0
+
+    if market == 'btts':
+        if hg > 0 and ag > 0:
+            state = 'won' if side == 'yes' else 'lost'
+        elif final:
+            state = 'won' if side == 'no' else 'lost'
+        else:
+            state = 'winning' if side == 'no' else 'losing'
+        return {'state': state, 'actual': None, 'margin': None}
+
+    actual = {'goals': hg + ag, 'corners': corners, 'yellow_cards': cards}.get(market)
+    if actual is None or line is None:
+        return {'state': 'unknown', 'actual': actual, 'margin': None}
+
+    if side == 'over':
+        state = 'won' if actual > line else ('lost' if final else 'losing')
+    else:
+        state = 'lost' if actual > line else ('won' if final else 'winning')
+    return {'state': state, 'actual': actual, 'margin': round(actual - line, 1)}
 
 
 class BetRadarService:
@@ -159,28 +191,12 @@ class BetRadarService:
         if row is None or row.status not in FINISHED_STATUSES:
             return None
 
-        hg, ag = row.home_goals or 0, row.away_goals or 0
-        market, side, line = pick['market'], pick['side'], pick['line']
-
-        if market == 'btts':
-            return 'win' if ('yes' if hg > 0 and ag > 0 else 'no') == side else 'loss'
-
-        if market == 'goals':
-            actual = hg + ag
-        elif market == 'corners':
-            if row.home_corners is None or row.away_corners is None:
-                return None
-            actual = row.home_corners + row.away_corners
-        elif market == 'yellow_cards':
-            if row.home_cards is None or row.away_cards is None:
-                return None
-            actual = row.home_cards + row.away_cards
-        else:
-            return None
-
-        if line is None:
-            return None
-        return 'win' if (actual > line if side == 'over' else actual < line) else 'loss'
+        both = lambda h, a: None if h is None or a is None else h + a
+        result = settle_pick(
+            pick['market'], pick['side'], pick['line'], row.home_goals, row.away_goals,
+            both(row.home_corners, row.away_corners), both(row.home_cards, row.away_cards), final=True,
+        )
+        return {'won': 'win', 'lost': 'loss'}.get(result['state'])
 
     def _run_pipeline(self, fixtures, date_str: str):
         if not fixtures:

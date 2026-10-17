@@ -2,7 +2,9 @@ import json
 
 from fastapi import APIRouter, HTTPException, Query
 
-from services.mlb_radar_service import MLBRadarService
+from services.baseball_service import BaseballService
+from services.mlb_radar_service import MLBRadarService, compact_game
+from services.radar_settlement import grade_picks, mlb_phase
 from utils.redis_client import get_redis_connection
 
 router = APIRouter(prefix="/mlb-radar", tags=["MLBRadar"])
@@ -33,6 +35,20 @@ def get_cached_mlb_radar(
     if raw is None:
         raise HTTPException(status_code=404, detail=f"No hay MLB Radar cacheado para {date}.")
     return json.loads(raw)
+
+
+@router.get("/results")
+def get_mlb_radar_results(
+    date: str = Query(..., description="YYYY-MM-DD"),
+):
+    """Calificación en vivo de los picks por game_pk. El marcador sale del calendario de
+    béisbol (caché de 2 min); compuesto aquí porque baseball_service importa mlb_radar_service."""
+    raw = _redis().get(f"mlb_radar:{date}")
+    if raw is None:
+        return {}
+    events = BaseballService().get_schedule(date)['data']
+    games = {str(g['gamePk']): g for g in (compact_game(e, date) for e in events)}
+    return grade_picks(json.loads(raw).get('suggestions', []), games, 'game_pk', mlb_phase)
 
 
 @router.get("/accuracy")

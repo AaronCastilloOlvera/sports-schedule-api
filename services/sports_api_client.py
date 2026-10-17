@@ -31,6 +31,18 @@ class SportsAPIClient:
       print(f"Error fetching last matches for team {team_id}: {e}")
       return []
 
+  def get_fixtures_by_ids(self, fixture_ids: list):
+    """Full fixtures (score, events, statistics) for up to 20 ids in one call."""
+    url = f"{self.base_url}/fixtures"
+    params = {"ids": "-".join(str(fid) for fid in fixture_ids)}
+    try:
+      response = requests.get(url, headers=self.headers, params=params)
+      response.raise_for_status()
+      return response.json().get("response", [])
+    except requests.RequestException as e:
+      print(f"Error fetching fixtures by ids {fixture_ids}: {e}")
+      return []
+
   def get_fixture_statistics(self, fixture_id: int):
     url = f"{self.base_url}/fixtures/statistics"
     params = {"fixture": fixture_id}

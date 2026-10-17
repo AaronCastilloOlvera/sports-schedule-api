@@ -33,6 +33,7 @@ import pytz
 
 from services.mlb_api_client import MLBApiClient
 from utils.odds import normalize_odds
+from services.radar_settlement import evaluate_final
 
 REQUEST_SLEEP = 0.3  # ESPN endpoint no es oficial — mismo respeto que NFL/NBA Radar
 
@@ -1236,35 +1237,4 @@ class MLBRadarService:
         """'win' | 'loss' | None si el juego no terminó o falta el dato."""
         if game is None or not is_final(game):
             return None
-        market, side, line = pick['market'], pick['side'], pick.get('line')
-        hs = game['home'].get('score') or 0
-        as_ = game['away'].get('score') or 0
-
-        if market == 'moneyline':
-            if hs == as_:
-                return None
-            return 'win' if (('home' if hs > as_ else 'away') == side) else 'loss'
-
-        if market == 'nrfi':
-            fh, fa = game['home'].get('first_inning_runs'), game['away'].get('first_inning_runs')
-            if fh is None or fa is None:
-                return None
-            actual = 'yes' if (fh + fa) == 0 else 'no'
-            return 'win' if actual == side else 'loss'
-
-        if market == 'total':
-            if line is None:
-                return None
-            total = hs + as_
-            return 'win' if (total > line if side == 'over' else total < line) else 'loss'
-
-        if market == 'hits':
-            if line is None:
-                return None
-            h, a = game['home'].get('hits'), game['away'].get('hits')
-            if h is None or a is None:
-                return None
-            total = h + a
-            return 'win' if (total > line if side == 'over' else total < line) else 'loss'
-
-        return None
+        return evaluate_final(pick, game)

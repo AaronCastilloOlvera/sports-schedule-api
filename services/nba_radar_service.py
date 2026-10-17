@@ -33,6 +33,7 @@ import pytz
 
 from services.nba_api_client import NBAApiClient
 from utils.odds import normalize_odds
+from services.radar_settlement import evaluate_final
 
 REQUEST_SLEEP = 0.3  # ESPN endpoint no es oficial — ser respetuoso entre llamadas secuenciales
 
@@ -637,29 +638,4 @@ class NBARadarService:
         """'win' | 'loss' | None (juego no terminado, falta dato, o push)."""
         if game is None or not is_final(game):
             return None
-        market, side, line = pick['market'], pick['side'], pick.get('line')
-        hs, as_ = game['home']['score'], game['away']['score']
-
-        if market == 'moneyline':
-            if hs == as_:
-                return None
-            actual_side = 'home' if hs > as_ else 'away'
-            return 'win' if actual_side == side else 'loss'
-
-        if market == 'spread':
-            if line is None:
-                return None
-            margin = (hs - as_) if side == 'home' else (as_ - hs)
-            if margin == -line:
-                return None  # push
-            return 'win' if margin > -line else 'loss'
-
-        if market == 'total':
-            if line is None:
-                return None
-            total = hs + as_
-            if total == line:
-                return None  # push
-            return 'win' if (total > line if side == 'over' else total < line) else 'loss'
-
-        return None
+        return evaluate_final(pick, game)

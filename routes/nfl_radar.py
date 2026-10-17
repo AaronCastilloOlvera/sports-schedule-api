@@ -3,6 +3,7 @@ import json
 from fastapi import APIRouter, HTTPException, Query
 
 from services.nfl_radar_service import NFLRadarService
+from services.radar_settlement import grade_picks, nfl_nba_phase
 from utils.redis_client import get_redis_connection
 
 router = APIRouter(prefix="/nfl-radar", tags=["NFLRadar"])
@@ -42,6 +43,19 @@ def get_cached_nfl_radar(
     if raw is None:
         raise HTTPException(status_code=404, detail=f"No hay NFL Radar cacheado para {date}.")
     return json.loads(raw)
+
+
+@router.get("/results")
+def get_nfl_radar_results(
+    date: str = Query(..., description="YYYY-MM-DD"),
+):
+    """Calificación en vivo de los picks por event_id, contra el marcador de get_schedule (caché de 2 min)."""
+    r = _redis()
+    raw = r.get(f"nfl_radar:{date}")
+    if raw is None:
+        return {}
+    games = {str(g['event_id']): g for g in NFLRadarService(r).get_schedule(date)}
+    return grade_picks(json.loads(raw).get('suggestions', []), games, 'event_id', nfl_nba_phase)
 
 
 @router.get("/accuracy")

@@ -30,6 +30,19 @@ def get_cached_bet_radar(
     return json.loads(raw)
 
 
+@router.get("/results")
+def get_bet_radar_results(
+    date: str = Query(..., description="YYYY-MM-DD"),
+):
+    """Calificación en vivo de los picks por fixture_id (la escribe el LiveWorker cada tick).
+    Vacío si todavía no empieza ningún partido con picks."""
+    r, error = get_redis_connection()
+    if r is None:
+        raise HTTPException(status_code=503, detail=f"Redis unavailable: {error}")
+    raw = r.get(f"bet_radar:results:{date}")
+    return json.loads(raw) if raw else {}
+
+
 @router.get("/accuracy")
 def get_bet_radar_accuracy(
     days: int = Query(7, ge=1, le=30, description="Ventana de días hacia atrás (excluye hoy)"),

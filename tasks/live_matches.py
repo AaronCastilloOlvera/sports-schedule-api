@@ -7,6 +7,9 @@ from utils.database import SessionLocal
 from utils.redis_client import get_redis_connection
 from services.match_service import MatchService
 from services.sports_api_client import SportsAPIClient
+from services.bet_radar_service import (
+  settle_pick, FINISHED_STATUSES, VOID_STATUSES, NOT_STARTED_STATUSES,
+)
 import models
 import os
 import pytz
@@ -17,6 +20,9 @@ MATCHES_DATE_TTL  = 432000   # 5 days  — matches:date:{YYYY-MM-DD}
 H2H_TTL           = 864000   # 10 days — h2h:teams:{id1}&{id2}
 RECENT_MATCHES_TTL = 86400   # 24 h    — team_recent_matches:{team_id}
 STATS_TTL          = 2592000 # 30 days — fixture_stats:{fixture_id}
+PICK_RESULTS_TTL   = 2592000 # 30 days — bet_radar:results:{YYYY-MM-DD}, same as the picks themselves
+GRADE_LOOKBACK     = timedelta(hours=6)  # stop polling a fixture that never reached a final status
+IDS_PER_CALL       = 20      # API-Sports max for /fixtures?ids=
 
 
 class LiveWorker:
@@ -134,6 +140,102 @@ class LiveWorker:
       r.setex(team_key, RECENT_MATCHES_TTL, json.dumps(enriched))
       print(f"[WORKER] ✅ Recent matches refreshed for team {team_id}.")
 
+  @staticmethod
+  def _stat_total(statistics, stat_type):
+    """Home + away value for one stat type; None when the league has no stats coverage."""
+    if not statistics or len(statistics) < 2:
+      return None
+    total = 0
+    for team in statistics:
+      entry = next((s for s in team.get("statistics", []) if s.get("type") == stat_type), None)
+      if entry is None:
+        return None
+      total += int(entry.get("value") or 0)
+    return total
+
+  def _grade_suggestion(self, suggestion, fixture, now):
+    status = fixture["fixture"]["status"]
+    short = status.get("short")
+    goals = fixture.get("goals") or {}
+    corners = self._stat_total(fixture.get("statistics"), "Corner Kicks")
+    cards = self._stat_total(fixture.get("statistics"), "Yellow Cards")
+    final = short in FINISHED_STATUSES
+
+    picks = []
+    for p in suggestion.get("top_picks", []):
+      base = {"market": p["market"], "side": p["side"], "line": p.get("line")}
+      if short in VOID_STATUSES:
+        picks.append({**base, "state": "void", "actual": None, "margin": None})
+      elif short in NOT_STARTED_STATUSES:
+        picks.append({**base, "state": "pending", "actual": None, "margin": None})
+      else:
+        picks.append({**base, **settle_pick(p["market"], p["side"], p.get("line"),
+                                            goals.get("home"), goals.get("away"), corners, cards, final)})
+
+    return {
+      "status": short,
+      "elapsed": status.get("elapsed"),
+      "home_goals": goals.get("home"),
+      "away_goals": goals.get("away"),
+      "corners": corners,
+      "yellow_cards": cards,
+      # Stats can still be revised by API-Sports after FT; the nightly DB persist is the definitive source.
+      "final": final or short in VOID_STATUSES,
+      "updated_at": now.isoformat(),
+      "picks": picks,
+    }
+
+  def _grade_bet_radar_picks(self, r, lookback=GRADE_LOOKBACK):
+    """
+    Grades BetRadar picks for fixtures that already kicked off and aren't
+    settled yet, fetching them in batches of IDS_PER_CALL. Yesterday is
+    included so late kickoffs that cross midnight still get settled.
+    A wider `lookback` backfills fixtures the regular ticks missed.
+    """
+    now = datetime.now(timezone.utc)
+    today = datetime.now(self.local_tz).date()
+
+    due = {}  # date_str -> [suggestion, ...]
+    results_by_date = {}
+    for date_str in ((today - timedelta(days=1)).isoformat(), today.isoformat()):
+      raw = r.get(f"bet_radar:{date_str}")
+      if not raw:
+        continue
+      results = json.loads(r.get(f"bet_radar:results:{date_str}") or "{}")
+      results_by_date[date_str] = results
+      for s in json.loads(raw).get("suggestions", []):
+        if not s.get("top_picks") or results.get(str(s["fixture_id"]), {}).get("final"):
+          continue
+        kickoff = parser.parse(s["date"])
+        if now - lookback <= kickoff <= now:
+          due.setdefault(date_str, []).append(s)
+
+    fixture_ids = sorted({s["fixture_id"] for picks in due.values() for s in picks})
+    if not fixture_ids:
+      return
+
+    fixtures = {}
+    for i in range(0, len(fixture_ids), IDS_PER_CALL):
+      time.sleep(0.6)
+      for f in self.api_client.get_fixtures_by_ids(fixture_ids[i:i + IDS_PER_CALL]):
+        fixtures[f["fixture"]["id"]] = f
+
+    settled = 0
+    for date_str, suggestions in due.items():
+      results = results_by_date[date_str]
+      for s in suggestions:
+        fixture = fixtures.get(s["fixture_id"])
+        if not fixture:
+          continue
+        entry = self._grade_suggestion(s, fixture, now)
+        results[str(s["fixture_id"])] = entry
+        settled += entry["final"]
+      r.setex(f"bet_radar:results:{date_str}", PICK_RESULTS_TTL, json.dumps(results))
+
+    calls = -(-len(fixture_ids) // IDS_PER_CALL)
+    print(f"[WORKER] 🎯 Graded picks for {len(fixtures)}/{len(fixture_ids)} fixture(s) "
+          f"({calls} API call(s), {settled} now final).")
+
   def run_live_update(self):
     """
     Fetches /fixtures?live=all, filters to favorite leagues, and merges rich
@@ -222,6 +324,12 @@ class LiveWorker:
         match_service = MatchService(db)
         match_service.get_matches_by_date(today_str, force_refresh=True)
         print("[WORKER] ✅ FT status captured.")
+
+      # Isolated so a grading failure never blocks the live score merge below.
+      try:
+        self._grade_bet_radar_picks(r)
+      except Exception as e:
+        print(f"[WORKER ERROR] ❌ Pick grading failed: {e}")
 
       if not live_favorites:
         print("[WORKER] 💤 No live matches in favorite leagues.")
