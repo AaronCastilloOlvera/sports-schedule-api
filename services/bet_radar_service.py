@@ -1,4 +1,5 @@
 import json
+import math
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -12,6 +13,16 @@ FINISHED_STATUSES = ('FT', 'AET', 'PEN')
 VOID_STATUSES = ('PST', 'CANC', 'ABD', 'AWD', 'WO')
 NOT_STARTED_STATUSES = ('NS', 'TBD')
 ACCURACY_TTL = 3600  # 1 h — hit rates only shift as the day's fixtures settle
+
+# ── Goals: Poisson model, validated in ml/backtest_goals.py ──────────────────
+# Fixed 2.5 line on purpose: picking the line from the model's own data
+# (_best_line) leaned 97% under and produced overconfident hit rates.
+GOALS_LINE        = 2.5
+GOALS_SHRINK_K    = 30   # pseudo-matches pulling a team toward its league mean — best Brier in the backtest
+GOALS_TEAM_WINDOW = 20   # matches per team for attack/defense ratings
+GOALS_LEAGUE_MIN  = 30   # matches before trusting a league's own home/away means
+GOALS_MIN_CONF    = 60
+GOALS_MAX_CONF    = 90
 
 LINES = {
     'corners':      [8.5, 9.5, 10.5, 11.5],
@@ -213,6 +224,8 @@ class BetRadarService:
         away_map = self._locality_batch(away_ids, is_home=False)
         h2h_map  = self._h2h_batch(pairs)
         ref_map  = self._referee_batch(referees)
+        team_goals   = self._team_goals_batch(home_ids + away_ids)
+        league_means = self._league_goal_means()
 
         results = []
         for f in fixtures:
@@ -224,7 +237,8 @@ class BetRadarService:
             league_id = getattr(f, 'league_id', None)
             dow       = f.date_utc.weekday() if f.date_utc else None  # 0=Mon, 6=Sun
 
-            analysis = self._analyze_fixture(f, home, away, h2h, ref_stats, league_id, dow, dow_mults)
+            analysis = self._analyze_fixture(f, home, away, h2h, ref_stats, league_id, dow, dow_mults,
+                                             team_goals, league_means)
             if analysis and analysis['top_picks']:
                 results.append(analysis)
 
@@ -338,6 +352,45 @@ class BetRadarService:
         for row in rows:
             result[row.team_id].append(row)
         return dict(result)
+
+    def _team_goals_batch(self, team_ids: list, limit: int = GOALS_TEAM_WINDOW) -> dict:
+        """{team_id: rows} — last `limit` finished matches at any venue, goals scored/conceded."""
+        if not team_ids:
+            return {}
+        rows = self.db.execute(text("""
+            SELECT * FROM (
+                SELECT t.team_id, f.league_id, t.is_home,
+                       CASE WHEN t.is_home THEN f.home_goals ELSE f.away_goals END AS scored,
+                       CASE WHEN t.is_home THEN f.away_goals ELSE f.home_goals END AS conceded,
+                       ROW_NUMBER() OVER (PARTITION BY t.team_id ORDER BY f.date_utc DESC) AS rn
+                FROM fixtures f
+                CROSS JOIN LATERAL (VALUES (f.home_team_id, true), (f.away_team_id, false)) AS t(team_id, is_home)
+                WHERE t.team_id IN :ids
+                  AND f.status IN ('FT','AET','PEN')
+                  AND f.home_goals IS NOT NULL AND f.away_goals IS NOT NULL
+            ) sub
+            WHERE rn <= :limit
+        """).bindparams(bindparam('ids', expanding=True)), {'ids': list(set(team_ids)), 'limit': limit}).fetchall()
+        result: dict = defaultdict(list)
+        for row in rows:
+            result[row.team_id].append(row)
+        return dict(result)
+
+    def _league_goal_means(self) -> dict:
+        """{league_id: (home_mean, away_mean)} for leagues with enough matches, plus None -> global means."""
+        rows = self.db.execute(text("""
+            SELECT league_id, COUNT(*) AS n, AVG(home_goals) AS h, AVG(away_goals) AS a
+            FROM fixtures
+            WHERE status IN ('FT','AET','PEN') AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+            GROUP BY league_id
+        """)).fetchall()
+        total = sum(r.n for r in rows) or 1
+        means = {None: (sum(float(r.h) * r.n for r in rows) / total if rows else 1.4,
+                        sum(float(r.a) * r.n for r in rows) / total if rows else 1.1)}
+        for r in rows:
+            if r.n >= GOALS_LEAGUE_MIN:
+                means[r.league_id] = (float(r.h), float(r.a))
+        return means
 
     def _h2h_batch(self, pairs: list, limit: int = 8) -> dict:
         if not pairs:
@@ -507,37 +560,41 @@ class BetRadarService:
             'samples': {'home': len(hv), 'away': len(av), 'h2h': len(xv)},
         }
 
-    def _analyze_goals(self, home, away, h2h, league_id, dow_mult):
-        hv = self._vals(home, 'total_goals')
-        av = self._vals(away, 'total_goals')
-        xv = self._vals(h2h,  'total_goals')
-        if len(hv + av + xv) < MIN_MATCHES:
+    @staticmethod
+    def _goal_rating(rows, key, league_means):
+        """
+        Attack (key='scored') or defense (key='conceded') vs the league mean of
+        each match's venue, shrunk toward 1.0 (= league average) by GOALS_SHRINK_K.
+        """
+        total = 0.0
+        for r in rows:
+            h, a = league_means.get(r.league_id, league_means[None])
+            # scoring at home is judged against the league's home mean; conceding at home against its away mean
+            mean = (h if r.is_home else a) if key == 'scored' else (a if r.is_home else h)
+            total += getattr(r, key) / max(mean, 0.3)
+        return (total + GOALS_SHRINK_K) / (len(rows) + GOALS_SHRINK_K)
+
+    def _analyze_goals(self, home_id, away_id, home, away, h2h, league_id, team_goals, league_means):
+        hrows, arows = team_goals.get(home_id, []), team_goals.get(away_id, [])
+        if len(hrows) + len(arows) < MIN_MATCHES:
             return None
 
-        h_avg = self._league_avg(home, 'total_goals', league_id)
-        a_avg = self._league_avg(away, 'total_goals', league_id)
-        avg   = ((h_avg + a_avg) / 2 if h_avg is not None and a_avg is not None
-                 else sum(hv + av + xv) / len(hv + av + xv))
+        mu_h, mu_a = league_means.get(league_id, league_means[None])
+        lam = (mu_h * self._goal_rating(hrows, 'scored', league_means) * self._goal_rating(arows, 'conceded', league_means)
+               + mu_a * self._goal_rating(arows, 'scored', league_means) * self._goal_rating(hrows, 'conceded', league_means))
+        p_over = 1 - sum(math.exp(-lam) * lam ** k / math.factorial(k) for k in range(math.floor(GOALS_LINE) + 1))
 
-        xg_vals = self._vals(home, 'total_xg') + self._vals(away, 'total_xg')
-        xg_avg  = None
-        if len(xg_vals) >= 4:
-            xg_avg = round(sum(xg_vals) / len(xg_vals), 1)
-            avg = avg * 0.65 + xg_avg * 0.35
-
-        avg *= dow_mult
-
-        line = self._best_line(hv + av + xv, LINES['goals'], 2.5)
-        side = 'under' if avg < line else 'over'
-        conf = self._weighted_confidence(hv, av, xv, line, side)
-
-        if conf is None or conf < 58:
+        side = 'over' if p_over >= 0.5 else 'under'
+        conf = min(round(max(p_over, 1 - p_over) * 100), GOALS_MAX_CONF)
+        if conf < GOALS_MIN_CONF:
             return None
+
+        hv, av, xv = self._vals(home, 'total_goals'), self._vals(away, 'total_goals'), self._vals(h2h, 'total_goals')
         return {
-            'projected': round(avg, 1), 'xg_avg': xg_avg,
-            'line': line, 'side': side, 'confidence': conf,
+            'projected': round(lam, 1), 'p_over': round(p_over, 3), 'model': 'poisson',
+            'line': GOALS_LINE, 'side': side, 'confidence': conf,
             'home_avg': self._avg(hv), 'away_avg': self._avg(av), 'h2h_avg': self._avg(xv),
-            'samples': {'home': len(hv), 'away': len(av), 'h2h': len(xv)},
+            'samples': {'home': len(hrows), 'away': len(arows), 'h2h': len(xv)},
         }
 
     def _analyze_yellow_cards(self, home, away, h2h, ref_stats, league_id, dow_mult):
@@ -625,18 +682,20 @@ class BetRadarService:
 
     # ── orchestration ─────────────────────────────────────────────────────────
 
-    def _analyze_fixture(self, fixture, home, away, h2h, ref_stats, league_id, dow, dow_mults):
+    def _analyze_fixture(self, fixture, home, away, h2h, ref_stats, league_id, dow, dow_mults,
+                         team_goals, league_means):
         hn = fixture.home_team_name
         an = fixture.away_team_name
 
-        dow_goals   = dow_mults.get(dow, {}).get('goals',   1.0) if dow is not None else 1.0
+        # No DOW multiplier for goals: the Poisson model was validated without it.
         dow_corners = dow_mults.get(dow, {}).get('corners', 1.0) if dow is not None else 1.0
         dow_cards   = dow_mults.get(dow, {}).get('cards',   1.0) if dow is not None else 1.0
 
         markets = {}
         for key, fn in [
             ('corners',      lambda: self._analyze_corners(home, away, h2h, league_id, dow_corners)),
-            ('goals',        lambda: self._analyze_goals(home, away, h2h, league_id, dow_goals)),
+            ('goals',        lambda: self._analyze_goals(fixture.home_team_id, fixture.away_team_id, home, away, h2h,
+                                                             league_id, team_goals, league_means)),
             ('yellow_cards', lambda: self._analyze_yellow_cards(home, away, h2h, ref_stats, league_id, dow_cards)),
             ('btts',         lambda: self._analyze_btts(home, away, h2h)),
         ]:
