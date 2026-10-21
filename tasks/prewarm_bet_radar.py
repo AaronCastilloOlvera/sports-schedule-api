@@ -48,7 +48,7 @@ FixtureRow = namedtuple('FixtureRow', [
     'id', 'home_team_id', 'home_team_name',
     'away_team_id', 'away_team_name',
     'home_goals', 'away_goals', 'date_utc',
-    'referee', 'league_id', 'status',
+    'referee', 'league_id', 'status', 'league_name',
 ])
 
 
@@ -95,6 +95,7 @@ class BetRadarPrewarmWorker:
                     referee=m['fixture'].get('referee'),
                     league_id=m.get('league', {}).get('id'),
                     status=m['fixture']['status']['short'],
+                    league_name=m.get('league', {}).get('name'),
                 ))
 
             print(f' -> {len(fixtures)} fixtures')

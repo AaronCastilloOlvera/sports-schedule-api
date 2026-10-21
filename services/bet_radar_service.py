@@ -13,6 +13,7 @@ FINISHED_STATUSES = ('FT', 'AET', 'PEN')
 VOID_STATUSES = ('PST', 'CANC', 'ABD', 'AWD', 'WO')
 NOT_STARTED_STATUSES = ('NS', 'TBD')
 ACCURACY_TTL = 3600  # 1 h — hit rates only shift as the day's fixtures settle
+API_SPORTS_MEDIA = 'https://media.api-sports.io/football'  # logo CDN, no quota cost
 
 # ── Goals: Poisson model, validated in ml/backtest_goals.py ──────────────────
 # Fixed 2.5 line on purpose: picking the line from the model's own data
@@ -707,8 +708,10 @@ class BetRadarService:
 
         return {
             'fixture_id':  fixture.id,
-            'home_team':   {'id': fixture.home_team_id, 'name': hn},
-            'away_team':   {'id': fixture.away_team_id, 'name': an},
+            'league':      {'id': league_id, 'name': getattr(fixture, 'league_name', None),
+                            'logo': f'{API_SPORTS_MEDIA}/leagues/{league_id}.png' if league_id else None},
+            'home_team':   {'id': fixture.home_team_id, 'name': hn, 'logo': f'{API_SPORTS_MEDIA}/teams/{fixture.home_team_id}.png'},
+            'away_team':   {'id': fixture.away_team_id, 'name': an, 'logo': f'{API_SPORTS_MEDIA}/teams/{fixture.away_team_id}.png'},
             'date':        fixture.date_utc.isoformat() if fixture.date_utc else None,
             'referee':     fixture.referee,
             'result':      f"{fixture.home_goals}-{fixture.away_goals}" if fixture.home_goals is not None else None,

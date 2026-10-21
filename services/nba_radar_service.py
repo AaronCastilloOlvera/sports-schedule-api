@@ -138,6 +138,8 @@ def _side_from_event(competitors: list, home_away: str) -> dict:
         'id': team.get('id'),
         'name': team.get('displayName'),
         'abbr': team.get('abbreviation'),
+        'logo': team.get('logo'),
+        'logo_dark': team.get('logoDark'),
         'score': score,
     }
 
@@ -387,8 +389,8 @@ class NBARadarService:
             'event_id':  g['event_id'],
             'date':      g['date'],
             'game_date': g.get('game_date'),
-            'home_team': {'id': home.get('id'), 'name': home.get('name')},
-            'away_team': {'id': away.get('id'), 'name': away.get('name')},
+            'home_team': {k: home.get(k) for k in ('id', 'name', 'logo', 'logo_dark')},
+            'away_team': {k: away.get(k) for k in ('id', 'name', 'logo', 'logo_dark')},
             'result':    f"{away.get('score')}-{home.get('score')}" if is_final(g) else None,
             'markets':   markets,
             'top_picks': top_picks,
