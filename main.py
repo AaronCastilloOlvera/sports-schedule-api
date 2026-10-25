@@ -1,7 +1,7 @@
 """
 Sports Schedule API - Main application file
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from dotenv import load_dotenv
@@ -10,7 +10,8 @@ from models import base as models
 import os
 
 # Import routers
-from routes import leagues, matches, redis, bets, dev_tools, status, teams, odds, bankroll, baseball, bet_radar, mlb_radar, nfl_radar, nba_radar, playdoit
+from routes import leagues, matches, redis, bets, dev_tools, status, teams, odds, bankroll, baseball, bet_radar, mlb_radar, nfl_radar, nba_radar, playdoit, auth
+from utils.auth import require_admin
 from utils.redis_client import get_redis_connection
 
 # Load environment variables
@@ -20,10 +21,15 @@ load_dotenv()
 origins = os.getenv("ALLOWED_ORIGINS", "").split(",")
 
 # Initialize FastAPI app
+# Swagger/OpenAPI only on a local machine — in production it would publish every endpoint.
+is_local = os.getenv("APP_ENV") == "localhost"
 app = FastAPI(
     title="Sports Schedule API",
     description="API for managing sports schedules and matches",
-    version="1.0.0"
+    version="1.0.0",
+    docs_url="/docs" if is_local else None,
+    redoc_url="/redoc" if is_local else None,
+    openapi_url="/openapi.json" if is_local else None,
 )
 
 # Add CORS middleware
@@ -38,22 +44,13 @@ app.add_middleware(
 # Create database tables
 models.Base.metadata.create_all(bind=database.engine)
 
-# Register routers
-app.include_router(leagues.router)
-app.include_router(matches.router)
-app.include_router(teams.router)
-app.include_router(redis.router)
-app.include_router(bets.router)
-app.include_router(dev_tools.router)
-app.include_router(status.router)
-app.include_router(odds.router)
-app.include_router(bankroll.router)
-app.include_router(baseball.router)
-app.include_router(bet_radar.router)
-app.include_router(mlb_radar.router)
-app.include_router(nfl_radar.router)
-app.include_router(nba_radar.router)
-app.include_router(playdoit.router)
+# Register routers — every router requires the admin token except /auth (the login itself).
+# Protecting at registration means a new router can't be left open by forgetting a decorator.
+app.include_router(auth.router)
+protected = [Depends(require_admin)]
+for module in (leagues, matches, teams, redis, bets, dev_tools, status, odds, bankroll,
+               baseball, bet_radar, mlb_radar, nfl_radar, nba_radar, playdoit):
+    app.include_router(module.router, dependencies=protected)
 
 @app.get("/")
 def read_root():

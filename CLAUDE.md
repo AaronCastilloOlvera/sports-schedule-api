@@ -42,6 +42,8 @@ Route → Service → DB query (historical data)
 Route → Service → Redis (live/today's schedule, odds)
 ```
 
+**Auth** — single-admin JWT (`utils/auth.py`, `routes/auth.py`). `POST /auth/login` is the only public router; every other router is registered in `main.py` with `dependencies=[Depends(require_admin)]`, so a new router is protected by default. `/` and `/health` (defined on the app, not a router) stay public for Railway health checks. Credentials come from env vars (no users table) and the module **fails closed**: missing `ADMIN_USERNAME`/`ADMIN_PASSWORD_HASH`/`JWT_SECRET` → login 503 and every protected route 401. Failed logins are rate-limited in memory per client IP (5 per 15 min; IP taken from the last `X-Forwarded-For` hop because Railway's proxy fronts every request). Swagger (`/docs`, `/redoc`, `/openapi.json`) only exists when `APP_ENV=localhost`. The orchestrator and the Telegram bot write to the DB directly and never call the API, so they're unaffected.
+
 `routes/dev_tools.py` endpoints are **localhost-only** — they must not be exposed in production. Current endpoints: `POST /dev-tools/sync-db`, `POST /dev-tools/persist-fixtures?date=YYYY-MM-DD`.
 
 `routes/bankroll.py` — CRUD for deposit/withdrawal transactions. Endpoints: `GET /bankroll/transactions`, `POST /bankroll/transactions`, `PUT /bankroll/transactions/{id}`, `DELETE /bankroll/transactions/{id}`. Business logic in `services/bankroll_service.py`. Model in `models/bankroll_transaction.py`.
@@ -188,7 +190,11 @@ El costo se autooptimiza — a medida que la BD se llena, las llamadas de detall
 | `TELEGRAM_CHAT_ID` | — | Notifications | Telegram chat/channel ID to receive messages |
 | `GENAI_API_KEY` | — | Bets route | Google Gemini API key used by `/bets` AI analysis |
 | `ALLOWED_ORIGINS` | `""` | CORS | Comma-separated list of allowed CORS origins |
-| `APP_ENV` | — | Dev tools | Set to `localhost` to enable dev-tools endpoints |
+| `APP_ENV` | — | Dev tools | Set to `localhost` to enable dev-tools endpoints and Swagger `/docs` |
+| `ADMIN_USERNAME` | — | Auth | The single admin's username (required — API is closed without it) |
+| `ADMIN_PASSWORD_HASH` | — | Auth | bcrypt hash of the admin password, never the plain password. In a local `.env`, wrap it in single quotes (it contains `$`) |
+| `JWT_SECRET` | — | Auth | Random secret that signs session tokens (required). Rotating it signs everyone out |
+| `JWT_EXPIRE_HOURS` | `24` | Auth | Session lifetime |
 | `PIPELINE_HOUR` | `0` | Orchestrator | Hour (MX time) when the nightly pipeline cron fires |
 | `PIPELINE_MINUTE` | `15` | Orchestrator | Minute when the nightly pipeline cron fires |
 | `WORKER_INTERVAL_MINUTES` | `5` | Orchestrator | How often `run_live_update` runs |
@@ -269,7 +275,7 @@ Un job que borra automáticamente fixtures y sus datos relacionados que superen 
 |---|---|---|---|
 | 1 | **Logging** | `print()` everywhere — no log levels, no structured output | Replace with Python `logging` module; use `INFO`/`WARNING`/`ERROR` levels |
 | 2 | **Persist pipeline** | Two workers using Redis as staging buffer for data only they consume | Merge into one worker: API → DB directly, skip Redis for events/lineups/player_stats |
-| 3 | **Auth** | Zero authentication on any endpoint — dev-tools rely on `APP_ENV` env check | Add API key header check at minimum; use middleware so it's not per-route |
+| 3 | ~~**Auth**~~ | ✅ Done — single-admin JWT on every router (see **Auth** under Request flow) | |
 | 4 | **Error handling** | API-Sports failures are silently swallowed — no retry, no alerting | Add retry with exponential backoff on transient failures; Telegram alert on repeated failure |
 | 5 | **Orchestrator resilience** | If orchestrator crashes, no automatic restart | Use Railway's restart policy or a process supervisor |
 | 6 | **Migrations** | Alembic runs manually — easy to forget on deploy | Add `alembic upgrade head` as a release command in Railway |
