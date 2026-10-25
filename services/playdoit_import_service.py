@@ -1,9 +1,9 @@
 import json
 from datetime import datetime
 
+import models
 from models.league import League
 from services.bet_service import BetService
-from services.playdoit_client import PlaydoitClient
 from utils.odds import normalize_odds
 
 
@@ -143,18 +143,18 @@ def _build_leg(sel: dict, champ_catalog: dict) -> dict:
 
 class PlaydoitImportService:
     """
-    Imports tickets from Playdoit (Altenar), replacing manual capture via
-    the Telegram bot + vision model. The token is a short-lived session
-    token (hours) -- passed fresh on every run, never stored.
+    Maps and saves Playdoit (Altenar) bets as tickets. The *browser* fetches
+    them from Playdoit — Cloudflare blocks Playdoit's API from datacenter IPs
+    like Railway's, but accepts the user's own connection — and posts the raw
+    bets here. The Playdoit session token never reaches this server.
 
     `league` is resolved from the `leagues` catalog (by `playdoit_champ_id`)
     when already linked; otherwise it stays `None` until it's linked once
     from the frontend (dropdown on the ticket detail).
     """
-    def __init__(self, db, token: str):
+    def __init__(self, db):
         self.db = db
         self.bet_service = BetService(db)
-        self.client = PlaydoitClient(token)
 
     def _load_champ_catalog(self) -> dict:
         """{playdoit_champ_id: league name}, ONE query per import run --
@@ -163,33 +163,38 @@ class PlaydoitImportService:
                        .filter(League.playdoit_champ_id.isnot(None)).all())
         return {champ_id: name for champ_id, name in rows}
 
-    def import_range(self, date_from: str, date_to: str, dry_run: bool = False) -> dict:
+    def pending_ids(self, bet_ids: list) -> list:
         """
-        Date ranges can overlap between runs (e.g. running daily with a
-        "last N days" window), so every existing ticket is re-checked by
-        status instead of just being skipped:
-          - already final (won/lost/push) -> skip, it won't change anymore.
-          - still pending -> re-fetch the detail and update it, in case it
-            got resolved since the last run.
-          - doesn't exist yet -> import it as usual.
+        Which bets the browser still has to fetch the detail of: new ones, plus
+        saved ones that aren't final yet (they may have settled since the last
+        import). Final tickets (won/lost/push) won't change, so they're skipped
+        — that's what keeps each import down to a handful of detail calls.
         """
+        ticket_ids = {f'playdoit:{bet_id}': bet_id for bet_id in bet_ids}
+        final = {
+            ticket_id for ticket_id, status in
+            self.db.query(models.BettingTicket.ticket_id, models.BettingTicket.status)
+                   .filter(models.BettingTicket.ticket_id.in_(list(ticket_ids))).all()
+            if status in _FINAL_STATUSES
+        }
+        return [bet_id for ticket_id, bet_id in ticket_ids.items() if ticket_id not in final]
+
+    def import_bets(self, bets: list, dry_run: bool = False) -> dict:
+        """Creates or updates one ticket per raw bet detail, as fetched by the browser."""
         champ_catalog = self._load_champ_catalog()
-        bets = self.client.get_all_bets(date_from, date_to, statuses=None)
         imported, updated, skipped, failed, previewed = [], [], [], [], []
 
-        for bet_summary in bets:
-            ticket_id = f"playdoit:{bet_summary['id']}"
+        for bet in bets:
+            ticket_id = f"playdoit:{bet.get('id')}"
+            if not bet.get('id') or not bet.get('selections'):
+                failed.append(ticket_id)
+                continue
             existing = self.bet_service.get_ticket_by_id(ticket_id)
             if existing and existing.status in _FINAL_STATUSES:
                 skipped.append(ticket_id)
                 continue
 
-            detail = self.client.get_bet_detail(bet_summary['id'])
-            if not detail or not detail.get('selections'):
-                failed.append(ticket_id)
-                continue
-
-            ticket_data = self._map_ticket(ticket_id, detail, champ_catalog)
+            ticket_data = self._map_ticket(ticket_id, bet, champ_catalog)
             if dry_run:
                 previewed.append(ticket_data)
             elif existing:
@@ -201,8 +206,7 @@ class PlaydoitImportService:
 
         result = {
             'dry_run': dry_run,
-            'date_from': date_from, 'date_to': date_to,
-            'found': len(bets), 'imported': len(imported), 'updated': len(updated),
+            'received': len(bets), 'imported': len(imported), 'updated': len(updated),
             'skipped_final': len(skipped), 'failed': len(failed),
             'imported_ids': imported, 'updated_ids': updated, 'failed_ids': failed,
         }

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from services.playdoit_import_service import PlaydoitImportService
@@ -7,20 +8,29 @@ from utils.database import get_db
 router = APIRouter(prefix="/playdoit", tags=["playdoit"])
 
 
-@router.post("/import")
-async def trigger_import_playdoit(token: str, date_from: str, date_to: str,
-                                  dry_run: bool = False, db: Session = Depends(get_db)):
-  """
-  Imports tickets from Playdoit (Altenar) for a date range, replacing
-  manual capture via the Telegram bot.
+class PendingRequest(BaseModel):
+  bet_ids: list[int]
 
-  `token` is the Playdoit session JWT WITHOUT the "Bearer " prefix (the
-  client adds it) -- short-lived (hours), copied fresh from the browser
-  inspector on each run, never stored.
-  `date_from`/`date_to` are ISO UTC, same format the widget itself sends
-  (e.g. "2026-09-25T06:00:00.000Z").
-  `dry_run=true` maps and returns the tickets without saving them -- to
-  review the result before writing to the DB.
+
+class ImportRequest(BaseModel):
+  bets: list[dict]
+  dry_run: bool = False
+
+
+@router.post("/pending")
+def pending_playdoit_bets(body: PendingRequest, db: Session = Depends(get_db)):
   """
-  service = PlaydoitImportService(db, token)
-  return service.import_range(date_from, date_to, dry_run=dry_run)
+  IDs (from the browser's Playdoit bet history) whose detail still has to be
+  fetched: new bets and saved ones that aren't final yet.
+  """
+  return {"pending": PlaydoitImportService(db).pending_ids(body.bet_ids)}
+
+
+@router.post("/import")
+def import_playdoit_bets(body: ImportRequest, db: Session = Depends(get_db)):
+  """
+  Maps and saves raw Playdoit bet details fetched by the browser (Cloudflare
+  blocks Playdoit's API from Railway). `dry_run=true` maps and returns the
+  tickets without saving them.
+  """
+  return PlaydoitImportService(db).import_bets(body.bets, dry_run=body.dry_run)
