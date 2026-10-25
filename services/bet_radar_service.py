@@ -7,6 +7,8 @@ import pytz
 from sqlalchemy.orm import Session
 from sqlalchemy import text, bindparam
 
+from utils.referees import build_referee_keys
+
 MIN_MATCHES = 4
 MIN_DOW_SAMPLE = 30  # minimum fixtures per weekday to trust DOW multipliers
 FINISHED_STATUSES = ('FT', 'AET', 'PEN')
@@ -445,8 +447,26 @@ class BetRadarService:
         return dict(result)
 
     def _referee_batch(self, referees: list) -> dict:
+        """
+        Avg yellows per referee, pooling every spelling of the same person
+        (utils/referees.py). Clashing or unkeyed names fall back to exact match.
+        """
         if not referees:
             return {}
+        all_names = [r[0] for r in self.db.execute(
+            text("SELECT DISTINCT referee FROM fixtures WHERE referee IS NOT NULL")
+        ).fetchall()]
+        keys, clashing = build_referee_keys(set(all_names) | set(referees))
+        by_key = defaultdict(set)
+        for name, key in keys.items():
+            if key and key not in clashing:
+                by_key[key].add(name)
+
+        variants = {}
+        for ref in referees:
+            key = keys.get(ref)
+            variants[ref] = by_key[key] if key in by_key else {ref}
+
         rows = self.db.execute(
             text("""
                 SELECT
@@ -462,15 +482,18 @@ class BetRadarService:
                   AND aws.yellow_cards IS NOT NULL
                 GROUP BY f.referee
             """).bindparams(bindparam('refs', expanding=True)),
-            {'refs': referees},
+            {'refs': sorted(set().union(*variants.values()))},
         ).fetchall()
+        per_name = {row.referee: (int(row.sample_size), float(row.avg_yellows)) for row in rows}
 
         result = {}
-        for row in rows:
-            if int(row.sample_size) >= MIN_MATCHES:
-                result[row.referee] = {
-                    'avg_yellows': round(float(row.avg_yellows), 2),
-                    'sample_size': int(row.sample_size),
+        for ref, names in variants.items():
+            stats = [per_name[n] for n in names if n in per_name]
+            sample = sum(n for n, _ in stats)
+            if sample >= MIN_MATCHES:
+                result[ref] = {
+                    'avg_yellows': round(sum(n * avg for n, avg in stats) / sample, 2),
+                    'sample_size': sample,
                 }
         return result
 
@@ -604,52 +627,47 @@ class BetRadarService:
         xv = self._vals(h2h,  'total_yellows')
         all_v = hv + av + xv
 
-        has_team_data = len(all_v) >= MIN_MATCHES
-        has_ref_data  = ref_stats is not None
-        if not has_team_data and not has_ref_data:
+        # The referee drives the card count, so no referee history means no pick.
+        if ref_stats is None:
             return None
+        has_team_data = len(all_v) >= MIN_MATCHES
+        ref_avg = ref_stats['avg_yellows']
 
         if has_team_data:
             h_avg    = self._league_avg(home, 'total_yellows', league_id)
             a_avg    = self._league_avg(away, 'total_yellows', league_id)
             team_avg = ((h_avg + a_avg) / 2 if h_avg is not None and a_avg is not None
                         else sum(all_v) / len(all_v))
+            ref_w    = min(0.50, ref_stats['sample_size'] / 20)
+            avg      = team_avg * (1 - ref_w) + ref_avg * ref_w
         else:
-            team_avg = None
-
-        if has_ref_data:
-            ref_avg = ref_stats['avg_yellows']
-            ref_w   = min(0.50, ref_stats['sample_size'] / 20)
-            avg     = (team_avg * (1 - ref_w) + ref_avg * ref_w) if team_avg is not None else ref_avg
-        else:
-            avg = team_avg
+            avg = ref_avg
 
         avg *= dow_mult
 
         line = self._best_line(all_v if all_v else [avg], LINES['yellow_cards'], 3.5)
         side = 'under' if avg < line else 'over'
+        ref_side = 'under' if ref_avg < line else 'over'
+
         conf = self._weighted_confidence(hv, av, xv, line, side) if has_team_data else None
+        if conf is not None:
+            if ref_side == side:
+                conf = min(90, conf + 8)
+        else:
+            conf = min(75, ref_stats['sample_size'] * 5)
+            side = ref_side
 
-        if has_ref_data:
-            ref_side = 'under' if ref_stats['avg_yellows'] < line else 'over'
-            if conf is not None:
-                if ref_side == side:
-                    conf = min(90, conf + 8)
-            else:
-                conf = min(75, ref_stats['sample_size'] * 5)
-                side = ref_side
-
-        if conf is None or conf < 58:
+        if conf < 58:
             return None
         return {
             'projected': round(avg, 1),
             'line': line, 'side': side, 'confidence': conf,
-            'referee_avg': ref_stats['avg_yellows'] if has_ref_data else None,
-            'referee_sample': ref_stats['sample_size'] if has_ref_data else None,
+            'referee_avg': ref_avg,
+            'referee_sample': ref_stats['sample_size'],
             'home_avg': self._avg(hv), 'away_avg': self._avg(av),
             'samples': {
                 'home': len(hv), 'away': len(av), 'h2h': len(xv),
-                'referee': ref_stats['sample_size'] if has_ref_data else 0,
+                'referee': ref_stats['sample_size'],
             },
         }
 
