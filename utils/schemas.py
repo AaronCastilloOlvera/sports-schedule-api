@@ -66,6 +66,7 @@ class BettingTicketBase(BaseModel):
     bet_type: Optional[str] = None
     image_path: Optional[str] = None
     match_datetime: datetime
+    placed_at: Optional[datetime] = None
     device_type: Optional[str] = None
     studied: bool = False
     comments: str = ""

@@ -109,7 +109,34 @@ def _leg_outcome(sel_status_code) -> bool | None:
     return None
 
 
-def _build_leg(sel: dict, champ_catalog: dict) -> dict:
+def _build_selection(odd: dict) -> dict:
+    """One part of a BetBuilder (`bbOdds`). Altenar settles each part on its own
+    but gives no per-part price -- only the BetBuilder's combined one."""
+    side = _parse_side(odd.get('oddName'))
+    return {
+        'pick': odd.get('oddName'),
+        'market_type_id': odd.get('marketTypeId'),
+        'market_name_raw': odd.get('marketName'),
+        'side': side,
+        'line_used': _parse_line(odd.get('spec')) if side in ('over', 'under') else None,
+        'outcome': _leg_outcome(odd.get('status')),
+    }
+
+
+def _leg_extras(sel: dict, placed_at: datetime | None) -> dict:
+    """Leg fields added after the first imports; the backfill script reuses this
+    to patch them onto saved tickets without remapping anything else."""
+    event_date = _parse_dt(sel.get('eventDate'))
+    return {
+        'event_score': sel.get('eventScore'),
+        # Altenar's isLive/isLiveOrVirtual disagree with each other; placing the
+        # bet after kickoff is the reliable signal.
+        'is_live': placed_at > event_date if placed_at and event_date else None,
+        'selections': [_build_selection(o) for o in sel.get('bbOdds') or []] or None,
+    }
+
+
+def _build_leg(sel: dict, champ_catalog: dict, placed_at: datetime | None) -> dict:
     side = _parse_side(sel.get('name'))
     # `spec` doesn't always hold a numeric line -- for 1x2/moneyline markets
     # it's just the selection index (e.g. {"8":"1"}), not an over/under.
@@ -138,6 +165,7 @@ def _build_leg(sel: dict, champ_catalog: dict) -> dict:
         'odd': normalize_odds(sel.get('price')),
         'outcome': _leg_outcome(sel.get('status')),
         'event_date': sel.get('eventDate'),
+        **_leg_extras(sel, placed_at),
     }
 
 
@@ -216,7 +244,8 @@ class PlaydoitImportService:
 
     def _map_ticket(self, ticket_id: str, bet: dict, champ_catalog: dict) -> dict:
         selections = bet['selections']
-        legs = [_build_leg(s, champ_catalog) for s in selections]
+        placed_at = _parse_dt(bet.get('createdDate'))
+        legs = [_build_leg(s, champ_catalog, placed_at) for s in selections]
 
         bet_type = _classify_bet_type(bet.get('type'), selections)
 
@@ -254,6 +283,7 @@ class PlaydoitImportService:
             'match_name': ' + '.join(event_names) if event_names else None,
             'bet_type': bet_type,
             'match_datetime': match_datetime,
+            'placed_at': placed_at,
             'device_type': _DEVICE_MAP.get(bet.get('device')),
             'studied': False,
             'comments': 'Importado de Playdoit',

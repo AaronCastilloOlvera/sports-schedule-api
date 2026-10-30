@@ -19,6 +19,7 @@ class BettingTicket(Base):
     match_name = Column(String)
     bet_type = Column(String, nullable=True)
     match_datetime = Column(DateTime(timezone=True), nullable=False)
+    placed_at = Column(DateTime(timezone=True), nullable=True)
     device_type = Column(String)  # 'movil' or 'desktop'
     studied = Column(Boolean, default=False)
     comments = Column(String, default="")
