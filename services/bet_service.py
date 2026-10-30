@@ -94,14 +94,14 @@ class BetService:
     EMPTY = {
         'accumulated_data': [], 'daily_data': [], 'win_loss_counts': {'won': 0, 'lost': 0, 'push': 0},
         'sport_data': [], 'league_data': [], 'bet_type_data': [], 'odds_bucket_data': [],
-        'market_data': [], 'device_data': [], 'day_of_week_data': [], 'time_of_day_data': [],
+        'market_data': [], 'league_market_data': [], 'placement_data': [], 'device_data': [], 'day_of_week_data': [], 'time_of_day_data': [],
         'daily_count_profit': [],
         'summary': {'best_day': None, 'best_bet_profit': None, 'streak': 0, 'streak_type': None, 'avg_odds': 0},
     }
 
     rows = self.db.execute(text("""
         SELECT sport, league, odds, stake, net_profit, status,
-               match_datetime, bet_type, device_type, legs
+               match_datetime, placed_at, bet_type, device_type, legs
         FROM betting_tickets
         WHERE status IN ('won','lost','push') AND match_datetime IS NOT NULL
         ORDER BY match_datetime
@@ -162,6 +162,14 @@ class BetService:
                    'roi': round(v['p']/v['s']*100, 1) if v['s'] else 0,
                    'count': v['n']} for k, v in sm.items()]
 
+    # A BetBuilder leg is settled part by part (leg.selections), so each part
+    # counts on its own -- otherwise one failed part hides which market failed.
+    def _parts(leg):
+        return leg.get('selections') or [leg]
+
+    def _market(part):
+        return part.get('market_name_raw') or part.get('market')
+
     # league_data — win rate by league, from legs (ticket.league is None for
     # multi-league parlays/teasers by design). Falls back to the ticket
     # itself when there's no legs array (old Telegram-bot simple bets).
@@ -175,7 +183,8 @@ class BetService:
         if r.legs:
             for leg in r.legs:
                 if leg.get('league'):
-                    _bump_league(leg['league'], leg.get('outcome'))
+                    for part in _parts(leg):
+                        _bump_league(leg['league'], part.get('outcome'))
         elif r.league:
             _bump_league(r.league, r.status == 'won' if r.status in ('won', 'lost') else None)
     league_data = sorted(
@@ -213,20 +222,63 @@ class BetService:
     # market_data — win rate by market, from legs (same reasoning as
     # league_data). Top 15 by sample size to keep the chart readable.
     mkm: dict = {}
+    lmk: dict = {}
     for r in rows:
         if not r.legs: continue
         for leg in r.legs:
-            name = leg.get('market_name_raw') or leg.get('market')
-            if not name: continue
-            if name not in mkm: mkm[name] = {'w': 0, 'l': 0, 'n': 0}
-            mkm[name]['n'] += 1
-            outcome = leg.get('outcome')
-            if outcome is True: mkm[name]['w'] += 1
-            elif outcome is False: mkm[name]['l'] += 1
+            for part in _parts(leg):
+                name = _market(part)
+                if not name: continue
+                if name not in mkm: mkm[name] = {'w': 0, 'l': 0, 'n': 0}
+                mkm[name]['n'] += 1
+                outcome = part.get('outcome')
+                if outcome is True: mkm[name]['w'] += 1
+                elif outcome is False: mkm[name]['l'] += 1
+                if leg.get('league') and outcome is not None:
+                    key = (leg['league'], name)
+                    if key not in lmk: lmk[key] = {'w': 0, 'l': 0}
+                    lmk[key]['w' if outcome else 'l'] += 1
     market_data = sorted(
         [{'market': k, 'winRate': round(v['w']/(v['w']+v['l'])*100, 1) if (v['w']+v['l']) else 0, 'count': v['n']}
          for k, v in mkm.items()],
         key=lambda x: -x['count'])[:15]
+
+    # league_market_data — league x market, worst first: the combos to avoid.
+    # Below MIN_DECIDED picks a win rate says nothing, so those are left out.
+    MIN_DECIDED = 5
+    league_market_data = sorted(
+        [{'league': lg, 'market': mk, 'wins': v['w'], 'decided': v['w'] + v['l'],
+          'winRate': round(v['w'] / (v['w'] + v['l']) * 100, 1)}
+         for (lg, mk), v in lmk.items() if v['w'] + v['l'] >= MIN_DECIDED],
+        key=lambda x: (x['winRate'], -x['decided']))
+
+    # placement_data — how long before kickoff the bet was placed (Playdoit
+    # tickets only, they're the ones with placed_at). Split by bet type
+    # because each type has a very different base win rate.
+    PLACEMENT_BUCKETS = [
+        ('En vivo',     float('-inf'), 0),
+        ('0-10 min',    0,             10),
+        ('10-60 min',   10,            60),
+        ('1-6 h',       60,            360),
+        ('6 h+',        360,           float('inf')),
+    ]
+    pm: dict = {b[0]: {'p': 0.0, 's': 0.0, 'w': 0, 'n': 0, 'types': {}} for b in PLACEMENT_BUCKETS}
+    for r in rows:
+        if not r.placed_at: continue
+        minutes = (r.match_datetime - r.placed_at).total_seconds() / 60
+        b = pm[next(lbl for lbl, lo, hi in PLACEMENT_BUCKETS if lo <= minutes < hi)]
+        won = r.status == 'won'
+        b['p'] += float(r.net_profit or 0); b['s'] += float(r.stake or 0); b['n'] += 1; b['w'] += won
+        t = b['types'].setdefault(r.bet_type or 'Unknown', {'w': 0, 'n': 0})
+        t['n'] += 1; t['w'] += won
+    placement_data = [
+        {'bucket': lbl, 'profit': round(v['p'], 2), 'count': v['n'],
+         'winRate': round(v['w'] / v['n'] * 100, 1),
+         'roi': round(v['p'] / v['s'] * 100, 1) if v['s'] else 0,
+         'by_type': {k: {'winRate': round(t['w'] / t['n'] * 100, 1), 'count': t['n']}
+                     for k, t in v['types'].items()}}
+        for lbl, _, _ in PLACEMENT_BUCKETS if (v := pm[lbl])['n'] > 0
+    ]
 
     # device_data — Mobile vs Desktop, ticket-level. Only Playdoit sets this.
     dv: dict = {'mobile': {'p': 0.0, 'w': 0, 'n': 0}, 'desktop': {'p': 0.0, 'w': 0, 'n': 0}}
@@ -299,6 +351,8 @@ class BetService:
         'bet_type_data':      bet_type_data,
         'odds_bucket_data':   odds_bucket_data,
         'market_data':        market_data,
+        'league_market_data': league_market_data,
+        'placement_data':     placement_data,
         'device_data':        device_data,
         'day_of_week_data':   day_of_week_data,
         'time_of_day_data':   time_of_day_data,
